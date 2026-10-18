@@ -132,6 +132,7 @@ def test_install_linux_fresh_creates_group_and_units(
         ["groupadd", "wisp"],
         ["systemctl", "daemon-reload"],
         ["systemctl", "enable", "--now", "wisp.socket"],
+        ["systemctl", "restart", "wisp.service"],
         ["usermod", "-aG", "wisp", "testuser"],
     ]
     # No stop/disable: the target dir had no prior units.
@@ -172,9 +173,10 @@ def test_install_linux_refreshes_existing_units(
     assert commands[0] == ["getent", "group", "wisp"]
     assert ["systemctl", "stop", "wisp.service", "wisp.socket"] in commands
     assert ["systemctl", "disable", "wisp.service", "wisp.socket"] in commands
-    assert commands[-2:] == [
+    assert commands[-3:] == [
         ["systemctl", "daemon-reload"],
         ["systemctl", "enable", "--now", "wisp.socket"],
+        ["systemctl", "restart", "wisp.service"],
     ]
     # Group exists and user is already a member: no groupadd, no usermod.
     assert not any(call[0] == "groupadd" for call in commands)
@@ -319,6 +321,33 @@ def test_install_windows_warns_when_wireguard_missing(
     captured = capsys.readouterr()
     assert "WARNING: WireGuard tools not found: wg-quick.exe" in captured.out
     assert "wireguard.com/install" in captured.out
+
+
+def test_install_linux_fails_when_service_restart_fails(
+    runner: FakeRunner,
+    as_root: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path)
+    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
+    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    runner.results = {
+        ("systemctl", "restart"): subprocess.CompletedProcess(
+            [], 1, stdout="", stderr="unit is masked"
+        )
+    }
+
+    exit_code = install_daemon()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "Could not start wisp.service" in captured.err
+    assert "unit is masked" in captured.err
+    # No group-membership work happens after a failed service start.
+    assert not any(call[0] == "usermod" for call in runner.commands())
 
 
 # --- Linux uninstall flow ----------------------------------------------------

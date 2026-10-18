@@ -345,6 +345,14 @@ def _install_linux() -> int:
         )
         return 1
 
+    restart_result = _run(["systemctl", "restart", "wisp.service"])
+    if restart_result.returncode != 0:
+        _print_stderr(
+            "Could not start wisp.service: "
+            f"{restart_result.stderr.strip() or 'unknown error'}"
+        )
+        return 1
+
     # Group membership for the invoking user (the sudoer, not root).
     sudo_user = os.environ.get("SUDO_USER")
     if sudo_user:
