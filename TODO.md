@@ -72,9 +72,9 @@ Read-only health check; every check already exists as a building block.
 
 The root-requiring part of `setup.sh`, moved into the tool.
 
-- [ ] `sudo wisp daemon install`: write/refresh systemd units (socket +
+- [X] `sudo wisp daemon install`: write/refresh systemd units (socket +
   service), create the `wisp` group, enable units, print re-login hint
-- [ ] `sudo wisp daemon uninstall` parity
+- [X] `sudo wisp daemon uninstall` parity
 - [ ] Keep `setup.sh` as the bootstrap wrapper that only elevates and calls
   this subcommand (no duplicated unit definitions)
 
