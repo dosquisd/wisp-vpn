@@ -78,6 +78,23 @@ function Test-Command {
 }
 
 
+function Clear-PythonEnvironment {
+    # A machine-wide PYTHONHOME or PYTHONPATH poisons every Python process,
+    # including the uv-managed interpreter that builds Wisp. The interpreter
+    # then loads a foreign standard library and fails with
+    # "SRE module mismatch". Drop both so every child process inherits a
+    # clean environment; Python locates its own standard library without
+    # them.
+    foreach ($variable in @("PYTHONHOME", "PYTHONPATH")) {
+        if (Test-Path "Env:\$variable") {
+            Write-Host "Ignoring inherited $variable for this installation."
+
+            Remove-Item "Env:\$variable" -Force
+        }
+    }
+}
+
+
 function Install-Uv {
     Write-Step "Checking uv"
 
@@ -533,6 +550,8 @@ function Uninstall-WispServiceIfExists {
 
 
 Test-Administrator
+
+Clear-PythonEnvironment
 
 Install-Uv
 Install-Pulumi
