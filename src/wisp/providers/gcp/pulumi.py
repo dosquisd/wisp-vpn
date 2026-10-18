@@ -264,6 +264,8 @@ def create_gcp_instance(
         "instance_public_ip", instance.network_interfaces[0].access_configs[0].nat_ip
     )
     pulumi.export("instance_private_ip", instance.network_interfaces[0].network_ip)
-    pulumi.export("instance_private_key", pulumi.Output.secret(tls_private_key.private_key_pem))
+    pulumi.export(
+        "instance_private_key", pulumi.Output.secret(tls_private_key.private_key_pem)
+    )
     pulumi.export("wireguard_port", wireguard_port)
     pulumi.export("ssh_user", get_default_username(DEFAULT_IMAGE_FAMILY))

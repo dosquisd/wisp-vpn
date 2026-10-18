@@ -260,6 +260,8 @@ def create_ec2_instance(
     pulumi.export("instance_id", instance.id)
     pulumi.export("instance_public_ip", instance.public_ip)
     pulumi.export("instance_private_ip", instance.private_ip)
-    pulumi.export("instance_private_key", pulumi.Output.secret(tls_private_key.private_key_pem))
+    pulumi.export(
+        "instance_private_key", pulumi.Output.secret(tls_private_key.private_key_pem)
+    )
     pulumi.export("wireguard_port", wireguard_port)
     pulumi.export("ssh_user", get_default_username(ami.name))
