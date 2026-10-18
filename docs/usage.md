@@ -10,13 +10,14 @@ wisp            # no subcommand → launches the TUI
 wisp deploy     # CLI: deploy a VM
 wisp destroy    # CLI: destroy VMs
 wisp regions    # CLI: list available regions
+wisp daemon     # CLI: install/uninstall the privileged local daemon
 ```
 
 ## CLI subcommands
 
-Every subcommand accepts a positional `provider` argument (default `aws`;
-`aws`, `oci`, `gcp`, and `vps` today — see `ProviderEnum` for the current
-list).
+Every provider-facing subcommand accepts a positional `provider` argument
+(default `aws`; `aws`, `oci`, `gcp`, and `vps` today — see `ProviderEnum` for
+the current list). `gc` and `daemon` are provider-independent.
 
 > **Note:** Wisp ships with support for `aws`, `oci`, `gcp`, and `vps`
 > (bring-your-own-server) as of this writing, and the provider layer is
@@ -118,6 +119,33 @@ leftovers.
 wisp gc                 # report only
 wisp gc --refresh       # reconcile state with reality, then report
 wisp gc --destroy       # tear down every leftover stack
+```
+
+### `wisp daemon install | uninstall`
+
+Installs or removes the privileged local daemon that the frontend talks to
+(`setup.sh`/`setup.ps1` do the same job for a full install; this subcommand
+manages the daemon on its own). Requires root/sudo on Linux and an elevated
+terminal on Windows.
+
+- **Linux** (systemd, socket-activated): writes `/etc/systemd/system/wisp.socket`
+  and `wisp.service` (rendered from package data with the Python interpreter
+  that is running Wisp), creates the `wisp` group that owns `/run/wisp.sock`,
+  enables and starts the socket, and — when run under `sudo` — adds your user
+  to the `wisp` group. **Log out and back in** (or `newgrp wisp`) so the group
+  membership takes effect. Re-running `install` refreshes the units: it stops
+  and disables any existing units first.
+- **Windows**: installs the native service via the pywin32 wrapper and sets it
+  to start automatically (`uninstall` removes it).
+
+`uninstall` disables and deletes the two systemd units (Linux) and runs
+`systemctl daemon-reload`/`reset-failed`. The `wisp` **group is kept** — other
+members or local data may still depend on it; remove it manually with
+`sudo groupdel wisp` if nothing else needs it.
+
+```bash
+sudo wisp daemon install
+sudo wisp daemon uninstall
 ```
 
 ## CLI vs TUI behaviour

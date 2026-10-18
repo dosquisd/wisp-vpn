@@ -1,5 +1,5 @@
 [Unit]
-Description=Priviliged daemon for Wisp
+Description=Privileged daemon for Wisp
 Requires=wisp.socket
 
 [Service]

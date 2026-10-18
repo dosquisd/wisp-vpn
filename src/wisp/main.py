@@ -1,8 +1,8 @@
 """Wisp entry point.
 
 Parses command-line arguments and dispatches to either the interactive TUI (no
-subcommand) or a non-interactive command (``deploy``, ``destroy``, ``regions``).
-Exposed as the ``wisp`` console script.
+subcommand) or a non-interactive command (``deploy``, ``destroy``, ``regions``,
+``gc``, ``daemon``). Exposed as the ``wisp`` console script.
 """
 
 import argparse
@@ -45,6 +45,7 @@ class CommandEnum(enum.StrEnum):
     DESTROY = "destroy"
     REGIONS = "regions"
     GC = "gc"
+    DAEMON = "daemon"
 
 
 class RuntimeArgs(TypedDict):
@@ -55,6 +56,7 @@ class RuntimeArgs(TypedDict):
     region: str | None
     gc_destroy: bool
     gc_refresh: bool
+    daemon_command: str | None
     ttl_minutes: int | None
     wireguard_port: int | None
     host: str | None
@@ -64,13 +66,18 @@ class RuntimeArgs(TypedDict):
     log_level: str | None
 
 
-def parse_args() -> RuntimeArgs:
+def parse_args(argv: list[str] | None = None) -> RuntimeArgs:
     """Parse CLI arguments into normalized :class:`RuntimeArgs`.
 
     Builds subparsers for ``deploy``/``destroy``/``regions`` (each with an
     optional ``provider`` positional; ``deploy``/``destroy`` also take
-    ``-r/--region``). Command, provider, and region are lowercased; if no
-    subcommand is given, the command defaults to the TUI.
+    ``-r/--region``), ``gc``, and ``daemon`` (with nested required
+    ``install``/``uninstall`` subcommands). Command, provider, and region are
+    lowercased; if no subcommand is given, the command defaults to the TUI.
+
+    Args:
+        argv (list[str] | None): Argument list to parse; ``None`` (the
+            default) parses ``sys.argv``.
     """
     parser = argparse.ArgumentParser(description="Wisp CLI")
 
@@ -232,7 +239,24 @@ def parse_args() -> RuntimeArgs:
         "console) stop counting as leftovers.",
     )
 
-    args = parser.parse_args().__dict__
+    daemon_parser = subparsers.add_parser(
+        "daemon",
+        help="Install or remove the privileged local daemon",
+        parents=[log_level_parser],
+    )
+    daemon_subparsers = daemon_parser.add_subparsers(
+        dest="daemon_command", required=True
+    )
+    daemon_subparsers.add_parser(
+        "install",
+        help="Install (or refresh) the privileged local daemon",
+    )
+    daemon_subparsers.add_parser(
+        "uninstall",
+        help="Remove the privileged local daemon",
+    )
+
+    args = parser.parse_args(argv).__dict__
 
     return RuntimeArgs(
         command=(
@@ -248,6 +272,7 @@ def parse_args() -> RuntimeArgs:
         region=args["region"].lower() if args.get("region") is not None else None,
         gc_destroy=bool(args.get("destroy", False)),
         gc_refresh=bool(args.get("refresh", False)),
+        daemon_command=args.get("daemon_command"),
         ttl_minutes=args.get("ttl"),
         wireguard_port=args.get("wireguard_port"),
         host=args.get("host"),
@@ -385,9 +410,9 @@ def _create_provider_with_credentials(provider_option: ProviderEnum):
 def main() -> None:
     """Run Wisp: launch the TUI, or execute a non-interactive command.
 
-    With no subcommand, starts the Textual TUI. Otherwise instantiates the
-    selected provider and runs ``regions``, ``deploy``, or ``destroy``, printing
-    the result and exiting.
+    With no subcommand, starts the Textual TUI. Otherwise runs the selected
+    non-interactive command (``gc``, ``daemon`` install/uninstall, ``regions``,
+    ``deploy``, or ``destroy``), printing the result and exiting.
     """
     args = parse_args()
     command = args["command"]
@@ -407,6 +432,16 @@ def main() -> None:
     # always keeps DEBUG, so postmortems never lose detail.
     level_name = (args["log_level"] or "info").upper()
     logger.handlers[1].setLevel(getattr(logging, level_name, logging.INFO))
+
+    if command == CommandEnum.DAEMON:
+        # Lazy import: importing wisp.daemon.install at module level would set
+        # WISP_DAEMON=1 in this process (wisp/daemon/__init__.py) and flip the
+        # CLI logger to the daemon's stderr-only DEBUG sink for every command.
+        from wisp.daemon.install import install_daemon, uninstall_daemon
+
+        if args["daemon_command"] == "install":
+            sys.exit(install_daemon())
+        sys.exit(uninstall_daemon())
 
     # It's not necessary to do this assertion, because the CLI will always provide a provider, but it's a good safety check
     assert provider_option is not None, (

@@ -5,6 +5,22 @@ Runs as root under systemd (Linux) or as a native Windows Service (pywin32);
 the unprivileged frontend talks to it over a Unix socket (Linux) or Named Pipe
 (Windows). See also [security model](../security.md).
 
+## Installation
+
+`wisp daemon install` / `wisp daemon uninstall`
+([`wisp/daemon/install.py`](../../src/wisp/daemon/install.py), wired from
+`wisp.main`) installs, refreshes, and removes the daemon without running
+`setup.sh`/`setup.ps1`:
+
+- **Linux**: the systemd units ship as package data (`wisp/data/wisp.socket`
+  verbatim, `wisp/data/wisp.service.tpl` with an `{python_executable}`
+  placeholder) and are rendered with the running interpreter, so the daemon
+  runs under the same Python that installed Wisp. The command also creates the
+  `wisp` group and adds the invoking sudo user to it (re-login required).
+- **Windows**: dispatches to `wisp.daemon.windows_service`
+  (`install` / `--startup auto update` / `remove`).
+- Any other platform: a clear "not supported" error.
+
 ## Logging
 
 The daemon's logs live in one place per platform:

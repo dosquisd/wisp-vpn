@@ -1,0 +1,11 @@
+[Unit]
+Description=Socket for Wisp daemon
+
+[Socket]
+ListenStream=/run/wisp.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=wisp
+
+[Install]
+WantedBy=sockets.target

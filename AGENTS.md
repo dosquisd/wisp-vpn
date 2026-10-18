@@ -59,6 +59,7 @@ src/wisp/
 │   ├── server.py           # asyncio server (runs as root/SYSTEM)
 │   ├── transport.py        # Unix socket (Linux) + Named Pipe (Windows) transports
 │   ├── adapter.py          # Platform-specific privileged ops (Linux/Windows implemented; macOS NOT)
+│   ├── install.py          # `wisp daemon install/uninstall` (systemd units / pywin32 service)
 │   ├── protocol.py         # Request/Response wire format (newline-delimited JSON)
 │   └── windows_service.py  # Windows Service wrapper (pywin32)
 └── utils/                  # logger, platform detection, RNG, public IP, Pulumi helpers,
@@ -80,6 +81,8 @@ Non-Python assets shipped **inside** the package:
 
 ```text
 src/wisp/data/wireguard-server-install.sh  # Non-interactive WireGuard installer (angristan, MIT)
+src/wisp/data/wisp.socket                  # systemd socket unit (shipped verbatim)
+src/wisp/data/wisp.service.tpl        # systemd service template ({python_executable} placeholder)
 ```
 
 Runtime artifacts (private key, client config, logs) and `wisp.toml` are
