@@ -1,0 +1,29 @@
+name: CI - Unit Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+
+    paths:
+      # Dependencies
+      - pyproject.toml
+      - uv.lock
+
+      # Source code and tests
+      - src/wisp/**
+      - tests/**
+
+      # CI workflow file
+      - .github/workflows/ci-unit-tests.yml
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: ./.github/actions/setup-uv-env
+
+      - name: Run tests
+        shell: bash
+        run: uv run pytest -v

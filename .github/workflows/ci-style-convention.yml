@@ -1,0 +1,39 @@
+name: CI - Style
+
+on:
+  pull_request:
+    branches:
+      - main
+
+    paths:
+      # Dependencies
+      - pyproject.toml
+      - uv.lock
+
+      # Source code and tests
+      - src/wisp/**
+      - tests/**
+
+      # CI workflow file
+      - .github/workflows/ci-style-convention.yml
+
+jobs:
+  formatting:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: ./.github/actions/setup-uv-env
+
+      - name: Check formatting
+        shell: bash
+        run: uv run ruff format --check src/wisp tests
+
+  linter:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: ./.github/actions/setup-uv-env
+
+      - name: Run linter
+        shell: bash
+        run: uv run ruff check src/wisp tests
