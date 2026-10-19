@@ -107,7 +107,12 @@ function installDaemonFiles() {
     # Create a virtual environment for the daemon, isolated from the user's development environment
     python3 -m venv "${WISP_INSTALL_DIR}/venv"
     "${WISP_INSTALL_DIR}/venv/bin/pip" install --quiet --upgrade pip
-    # Install only the dependencies needed for the daemon (probably nothing external)
+
+    # Just meanwhile, install the required dependency for the daemon
+    # but this would be changed to use pyproject.toml and uv.lock in the future,
+    # but, first we need to use optional-dependencies in uv to avoid installing all the dependencies for the daemon,
+    # since some of them are not needed for the daemon to run.
+    "${WISP_INSTALL_DIR}/venv/bin/pip" install "platformdirs==4.11.7"
 
     echo -e "${GREEN}Daemon files installed in ${WISP_INSTALL_DIR}${NC}"
 }
