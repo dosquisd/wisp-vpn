@@ -35,6 +35,7 @@ from wisp.utils.pulumi import (
     stack_resource_counts,
 )
 from wisp.utils.watchdog import cancel_ttl_watchdog, schedule_ttl_watchdog
+from wisp.wireguard import disconnect_wireguard_client
 
 
 class CommandEnum(enum.StrEnum):
@@ -338,6 +339,17 @@ def _run_gc(destroy: bool = False, refresh: bool = False) -> None:
     if not destroy:
         print("Run `wisp gc --destroy` to tear them down.")
         return
+
+    # Disconnect the local WireGuard client before destroying any stacks, so the
+    # daemon can remove the local artifacts (SSH key + client conf) without
+    # leaving the client in a broken state. The daemon will also remove the
+    # server-side configs on the remote VM.
+    print("\nDisconnecting local WireGuard client...")
+    disconnect_response = disconnect_wireguard_client()
+    if not disconnect_response.ok:
+        logger.warning(
+            f"WireGuard client disconnect failed (may not be connected): {disconnect_response.message}."
+        )
 
     destroyed_any = False
     for provider, (region, count) in leftover.items():
