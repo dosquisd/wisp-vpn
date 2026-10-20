@@ -23,7 +23,7 @@ non-interactive CLI subcommands.
 | Document | Contents |
 | ---------- | ---------- |
 | [Architecture](./architecture.md) | High-level design, module map, runtime data flow |
-| [Installation](./installation.md) | System requirements, `setup.sh` (Linux), `setup.ps1` (Windows), daemon, dependencies, uninstall |
+| [Installation](./installation.md) | System requirements, `install.sh` (Linux), `setup.ps1` (Windows), daemon, dependencies, uninstall |
 | [Usage](./usage.md) | CLI subcommands and the interactive TUI |
 | [Configuration](./configuration.md) | `wisp.toml`, `WispConfig`, constants, Pulumi backend |
 | [Deployment flow](./deployment-flow.md) | Step-by-step of deploy and destroy |

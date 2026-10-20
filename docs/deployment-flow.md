@@ -195,9 +195,9 @@ CLI overrides it with `--ttl`; `0` keeps it off.
 `scripts/wireguard-server-install.sh` is a non-interactive WireGuard server
 installer (based on the widely used `angristan/wireguard-install`, MIT). It is
 driven entirely by environment variables set by the SSH/SFTP orchestration, so
-no interactive prompts are needed. `scripts/utils.sh` holds shared shell helpers
-(`isRoot`, `checkOS`, `installPackages`, `installWireGuardClient`,
-`uninstallWg`) used by both the server and client install scripts.
+no interactive prompts are needed. `scripts/wireguard-client-install.sh`
+carries its own shell helpers (`isRoot`, `checkOS`, `installPackages`,
+`installWireGuardClient`, `uninstallWg`) for the client-side install.
 
 ## Operating system differences in the deployment flow
 

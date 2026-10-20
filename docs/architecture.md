@@ -157,8 +157,8 @@ progress bar is used for the boot wait instead.
 
 ## Operating system differences
 
-- **Linux**: `setup.sh` installs the daemon (systemd socket activation via
-  `wisp.socket`/`wisp.service`) and `wg-quick` manages the local WireGuard
+- **Linux**: `wisp daemon install` installs the daemon (systemd socket activation
+  via `wisp.socket`/`wisp.service`) and `wg-quick` manages the local WireGuard
   interface. The daemon transports on Unix domain sockets (`/run/wisp.sock`).
   Sensitive files are secured with `0600` permissions.
 - **Windows**: `setup.ps1` installs a native Windows Service

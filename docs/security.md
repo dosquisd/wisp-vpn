@@ -21,9 +21,9 @@ From `packaging/wisp.socket` (Linux):
 - `SocketUser=root`
 - `SocketGroup=wisp`
 
-Only root and members of the `wisp` group can connect. `setup.sh` creates the
-`wisp` group and adds the installing user (`setup.ps1` does the equivalent on
-Windows with a local group). Group membership requires a re-login
+Only root and members of the `wisp` group can connect. `wisp daemon install`
+creates the `wisp` group and adds the installing user (`setup.ps1` does the
+equivalent on Windows with a local group). Group membership requires a re-login
 (or `newgrp wisp`) to take effect; until then, connecting to the daemon raises a
 `PermissionError` with guidance.
 

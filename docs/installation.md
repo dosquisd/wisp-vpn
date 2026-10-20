@@ -52,12 +52,13 @@ is left untouched.
   socket activation on Linux, or a native Windows service + Named Pipes on
   Windows; the macOS adapter is not implemented yet — see `MacOSAdapter`
   in [`daemon/adapter.py`](../src/wisp/daemon/adapter.py)).
-- **Python 3.14+** (see `.python-version` and `requires-python` in
+- **Python 3.12+** (see `.python-version` and `requires-python` in
   `pyproject.toml`) — `uv` installs it for you automatically.
-- **WireGuard tools** (`wg`, `wg-quick`) on the client — installed by `setup.sh`
-  (Linux) or `setup.ps1` (Windows).
-- **Pulumi CLI** — installed by `setup.sh` (Linux) or `setup.ps1` (Windows)
-  unless `--skip-pulumi` is passed.
+- **WireGuard tools** (`wg`, `wg-quick`) on the client — installed by
+  `scripts/install.sh` (Linux) or `setup.ps1` (Windows), or manually with your
+  distro's package manager.
+- **Pulumi CLI** — installed by `scripts/install.sh` (Linux, unless
+  `--skip-pulumi` is passed) or `setup.ps1` (Windows).
 - **Cloud credentials** available in the environment (for example via the AWS
   CLI, `~/.aws/credentials`, or `~/.oci/config`), with permissions to manage
   instances, security rules, and key pairs, **or** configured in `wisp.toml`.
@@ -86,35 +87,27 @@ uv tool install --editable .
 ### Linux
 
 The client-side daemon must run as root so it can bring the local WireGuard
-interface up and down. `setup.sh` installs it. **Run it as root** (it checks and
-exits otherwise):
+interface up and down. `wisp daemon install` installs it. **Run it as root**
+(it checks and exits otherwise):
 
 ```bash
-sudo ./setup.sh
-# or, to skip installing Pulumi (e.g. it is already installed):
-sudo ./setup.sh --skip-pulumi
+sudo wisp daemon install
 ```
 
-What `setup.sh` does, in order:
+What it does, in order:
 
-1. `initialCheck` — asserts it is running as root and detects the OS.
-2. `installWireGuardClient` — installs WireGuard tools for the detected OS and
-   verifies `wg` is available (shared helper from `scripts/utils.sh`).
-3. `ensureCurl` — installs `curl` if missing (needed to fetch Pulumi).
-4. `installPulumi` — detects Pulumi in the root or invoking user's environment;
-   if it is missing, installs it for the invoking user under `~/.pulumi`
-   (skipped with `--skip-pulumi`).
-5. `removeExistingInstallation` — stops and disables the previous service and
-   socket, removes their systemd unit files and clears the old daemon files.
-6. `createWispGroup` — creates the `wisp` group and adds the invoking user
-   (`$SUDO_USER`) to it. This group gates access to the daemon socket.
-7. `installDaemonFiles` — copies `src/` to `/usr/local/lib/wisp/src` and creates
-   an isolated virtualenv at `/usr/local/lib/wisp/venv`.
-8. `installSystemdUnits` — installs `wisp.socket` and `wisp.service`, reloads
-   systemd, and enables/starts the socket.
+1. Verifies it is running as root and that systemd is present.
+2. Warns if the WireGuard tools are missing (they can be installed later).
+3. Creates the `wisp` group (if missing) — it gates access to the daemon socket.
+4. Builds a root-owned venv at `/usr/local/lib/wisp/venv` from the first
+   suitable interpreter and installs `wisp-vpn` into it — this is what the
+   systemd unit executes, because a root service must not run user-mutable
+   code.
+5. Writes `wisp.socket` and `wisp.service`, reloads systemd, enables/starts
+   the socket, and restarts the service.
 
-> After running `setup.sh`, log out and back in (or run `newgrp wisp`) so your
-> new `wisp` group membership takes effect. Until then, connecting to the daemon
+> After running it, log out and back in (or run `newgrp wisp`) so your new
+> `wisp` group membership takes effect. Until then, connecting to the daemon
 > socket fails with a `PermissionError`.
 
 ### Windows
@@ -185,9 +178,10 @@ git pull
 uv tool install --editable . --force   # refresh the tool's isolated venv
 ```
 
-`setup.sh` / `setup.ps1` are idempotent — re-run them after pulling if the
-daemon units changed (on Windows, the script stops and uninstalls the
-existing service before reinstalling).
+`setup.ps1` (Windows) is idempotent — re-run it after pulling if the daemon
+units changed (the script stops and uninstalls the existing service before
+reinstalling). On Linux, re-run `sudo wisp daemon install` to refresh the
+units and the daemon's runtime venv.
 
 ## Uninstall
 

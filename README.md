@@ -92,7 +92,7 @@ TTL watchdog handles it even if nobody reopens Wisp.
 ## Install (from PyPI)
 
 Wisp is published on PyPI as **[`wisp-vpn`](https://pypi.org/project/wisp-vpn/)** —
-it needs Python **3.14+** (with `uv`, Python itself is managed for you).
+it needs Python **3.12+** (with `uv`, Python itself is managed for you).
 
 On Linux, the one-command installer sets everything up (uv, the `wisp-vpn`
 CLI, WireGuard tools, the optional Pulumi CLI, and the privileged daemon):
@@ -121,21 +121,22 @@ for `--skip-pulumi` / `--dry-run` flags and the uninstall script.
 
 ## Install (from source)
 
-Requirements: Python **3.14+** (if you install via `uv`, it manages Python for
-you — you never see this requirement), the
-[Pulumi CLI](https://www.pulumi.com/docs/install/), and WireGuard tools — both
-installed by the setup script.
+Requirements: Python **3.12+** (with `uv`, Python itself is managed for you —
+you never see this requirement), the
+[Pulumi CLI](https://www.pulumi.com/docs/install/), and WireGuard tools — the
+one-command installer above covers both on Linux; `setup.ps1` covers them on
+Windows.
 
 ```bash
 # 0. Clone and enter the repo
-git clone https://github.com/dosquisd/wisp.git && cd wisp
+git clone https://github.com/dosquisd/wisp-vpn.git && cd wisp-vpn
 
 # 1. Install the CLI (isolated tool venv)
 uv tool install .
 
 # 2. Install the privileged local daemon (needs root/administrator)
-sudo ./setup.sh            # Linux; or: sudo ./setup.sh --skip-pulumi
-./setup.ps1                # Windows (self-elevates to administrator)
+sudo wisp daemon install      # Linux
+./setup.ps1                   # Windows (self-elevates to administrator)
 ```
 
 Then log out and back in (or `newgrp wisp`) so your `wisp` group membership
@@ -204,7 +205,7 @@ Full documentation lives in [`docs/`](https://github.com/dosquisd/wisp-vpn/tree/
 | | |
 | --- | --- |
 | [Architecture](https://github.com/dosquisd/wisp-vpn/tree/main/docs/architecture.md) | High-level design, module map, runtime data flow |
-| [Installation](https://github.com/dosquisd/wisp-vpn/tree/main/docs/installation.md) | System requirements, `setup.sh` / `setup.ps1`, daemon |
+| [Installation](https://github.com/dosquisd/wisp-vpn/tree/main/docs/installation.md) | System requirements, `install.sh` / `setup.ps1`, daemon |
 | [Usage](https://github.com/dosquisd/wisp-vpn/tree/main/docs/usage.md) | Full CLI and TUI reference |
 | [Configuration](https://github.com/dosquisd/wisp-vpn/tree/main/docs/configuration.md) | `wisp.toml`, `WispConfig`, per-provider settings |
 | [Deployment flow](https://github.com/dosquisd/wisp-vpn/tree/main/docs/deployment-flow.md) | Step-by-step deploy and destroy |

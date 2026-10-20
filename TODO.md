@@ -48,8 +48,8 @@ Depends on PyPI. Pattern: `curl -fsSL <url>/install.sh | bash`.
 - [X] `uv tool install wisp-vpn`
 - [X] WireGuard tools + Pulumi CLI (or defer to `sudo wisp daemon install`)
 - [X] Delegate the privileged part to `sudo wisp daemon install` (single
-  source of truth; `setup.sh` as a thin wrapper is still tracked in the
-  `wisp daemon install` section below)
+  source of truth; the bootstrap role is filled by `scripts/install.sh` —
+  `setup.sh` was deleted)
 - [ ] Windows equivalent (`setup.ps1` parity)
 
 ## `wisp doctor` (CLI diagnostics)
@@ -71,13 +71,14 @@ Read-only health check; every check already exists as a building block.
 
 ## `wisp daemon install` (Linux parity with Windows)
 
-The root-requiring part of `setup.sh`, moved into the tool.
+The root-requiring daemon setup, owned by the tool (`scripts/install.sh`
+delegates to it; the legacy `setup.sh` was deleted).
 
 - [X] `sudo wisp daemon install`: write/refresh systemd units (socket +
   service), create the `wisp` group, enable units, print re-login hint
 - [X] `sudo wisp daemon uninstall` parity
-- [ ] Keep `setup.sh` as the bootstrap wrapper that only elevates and calls
-  this subcommand (no duplicated unit definitions)
+- [X] Bootstrap wrapper with no duplicated unit definitions: superseded by
+  `scripts/install.sh` (setup.sh removed)
 
 ## Watchdog improvements (survive the client machine being off)
 

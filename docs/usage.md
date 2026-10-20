@@ -124,9 +124,9 @@ wisp gc --destroy       # tear down every leftover stack
 ### `wisp daemon install | uninstall`
 
 Installs or removes the privileged local daemon that the frontend talks to
-(`setup.sh`/`setup.ps1` do the same job for a full install; this subcommand
-manages the daemon on its own). Requires root/sudo on Linux and an elevated
-terminal on Windows.
+(`scripts/install.sh`/`setup.ps1` call it as part of a full install; this
+subcommand manages the daemon on its own). Requires root/sudo on Linux and an
+elevated terminal on Windows.
 
 - **Linux** (systemd, socket-activated): builds a root-owned venv at
   `/usr/local/lib/wisp/venv` with `wisp-vpn` installed into it (validated

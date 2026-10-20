@@ -9,8 +9,9 @@ the unprivileged frontend talks to it over a Unix socket (Linux) or Named Pipe
 
 `wisp daemon install` / `wisp daemon uninstall`
 ([`wisp/daemon/install.py`](../../src/wisp/daemon/install.py), wired from
-`wisp.main`) installs, refreshes, and removes the daemon without running
-`setup.sh`/`setup.ps1`:
+`wisp.main`) installs, refreshes, and removes the daemon on its own — on Linux
+no setup script is involved, and on Windows `setup.ps1` still covers the
+service install:
 
 - **Linux**: the command first builds a **root-owned venv** at
   `/usr/local/lib/wisp/venv` (base interpreter picked from a candidate

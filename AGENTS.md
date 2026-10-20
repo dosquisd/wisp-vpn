@@ -72,9 +72,7 @@ Supporting non-Python assets at the repo root:
 scripts/    install.sh                   # Self-contained bootstrap installer (uv + wisp-vpn + WireGuard
                                          # + optional Pulumi + `sudo wisp daemon install` + install manifest)
             uninstall.sh                 # Self-contained manifest-driven uninstaller
-            wireguard-client-install.sh  # Client installer
-            utils.sh                     # Shared shell helpers (installWireGuardClient, etc.)
-setup.sh                                 # Linux installer: daemon (systemd), WireGuard tools, Pulumi
+            wireguard-client-install.sh  # Client installer (self-contained: carries its own shell helpers)
 setup.ps1                                # Windows installer: native service, WireGuard exe, Pulumi via winget
 packaging/  wisp.socket, wisp.service    # systemd units (Linux only)
 wisp.toml.example                        # Config template (wisp.toml is written to WISP_CONFIG_DIR)
@@ -294,7 +292,7 @@ resolved per user via `platformdirs` (env overrides `WISP_DATA_DIR`,
 
 - [`docs/README.md`](docs/README.md) — documentation index
 - [`docs/architecture.md`](docs/architecture.md) — high-level design, module map, data flow
-- [`docs/installation.md`](docs/installation.md) — requirements, setup.sh / setup.ps1, daemon, dependencies
+- [`docs/installation.md`](docs/installation.md) — requirements, install.sh / setup.ps1, daemon, dependencies
 - [`docs/usage.md`](docs/usage.md) — CLI subcommands and the TUI
 - [`docs/configuration.md`](docs/configuration.md) — wisp.toml, WispConfig, constants, provider config
 - [`docs/deployment-flow.md`](docs/deployment-flow.md) — step-by-step deploy/destroy
