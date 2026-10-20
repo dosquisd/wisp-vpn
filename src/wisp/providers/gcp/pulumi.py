@@ -54,7 +54,7 @@ def get_default_username(image_family: str) -> str:
 
 def _provider_opts(provider: pulumi.Resource | None) -> dict:
     """Build resource options dict with provider if provided."""
-    return {"opts": pulumi.ResourceOptions(provider=provider)} if provider else {}
+    return {"opts": pulumi.ResourceOptions(provider=provider)} if provider else {}  # pyright: ignore[reportArgumentType]
 
 
 def get_firewall(

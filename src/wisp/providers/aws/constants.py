@@ -1,4 +1,4 @@
-DEFAULT_REGION: str = "us-east-2"
+DEFAULT_AWS_REGION: str = "us-east-2"
 DEFAULT_EC2_INSTANCE_TYPE: str = "t3.micro"
 
 # AMI related. Actually, this depends on the region, we need to ensure that this AMI is, at least,

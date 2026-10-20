@@ -200,6 +200,8 @@ def resolve_aws_credentials() -> AWSCredentials:
     (profile → env var → its own default) instead of Wisp silently forcing
     a region the person never asked for.
     """
+    from wisp.providers.aws.constants import DEFAULT_AWS_REGION
+
     toml_config = load_toml_config()
     aws_toml = toml_config.get("aws", {})
     profile = aws_toml.get("profile", "")
@@ -207,7 +209,7 @@ def resolve_aws_credentials() -> AWSCredentials:
     cli_config = _read_aws_cli_files(profile)
 
     return AWSCredentials(
-        region=aws_toml.get("region", cli_config.get("region", "")),
+        region=aws_toml.get("region", cli_config.get("region", DEFAULT_AWS_REGION)),
         profile=profile,
         access_key_id=aws_toml.get(
             "access_key_id", cli_config.get("access_key_id", "")
@@ -312,6 +314,8 @@ def resolve_gcp_credentials() -> GCPCredentials:
     ``GCLOUD_PROJECT``) and :func:`google.auth.default` — which resolves the
     project and the Application Default Credentials (ADC) in one call.
     """
+    from wisp.providers.gcp.constants import DEFAULT_GCP_REGION
+
     toml_config = load_toml_config()
     gcp_toml = toml_config.get("gcp", {})
 
@@ -337,7 +341,7 @@ def resolve_gcp_credentials() -> GCPCredentials:
             except Exception:
                 pass
 
-    region = gcp_toml.get("region", "")
+    region = gcp_toml.get("region", DEFAULT_GCP_REGION)
     zone = gcp_toml.get("zone", "")
     if not zone and region:
         zone = f"{region}-a"
@@ -426,7 +430,7 @@ def _load_google_credentials(creds: GCPCredentials):
         try:
             with open(creds.credentials_path) as f:
                 key_type = json.load(f).get("type", "")
-        except OSError, ValueError, json.JSONDecodeError:
+        except (OSError, ValueError, json.JSONDecodeError):  # fmt: skip
             key_type = ""
 
         if key_type != "service_account":

@@ -26,6 +26,42 @@ def test_load_toml_config_reads_user_config(tmp_path, monkeypatch):
         settings._cached_config = None
 
 
+def test_ensure_user_config_creates_missing_file():
+    """ensure_user_config creates the user config with a header when missing."""
+    import stat
+
+    path = constants.WISP_USER_CONFIG_PATH
+    if path.exists():
+        path.unlink()
+
+    written = settings.ensure_user_config()
+
+    assert written == path
+    assert path.is_file()
+    assert "wisp.toml.example" in path.read_text(encoding="utf-8")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_ensure_user_config_preserves_existing_content():
+    """ensure_user_config never touches an existing config file."""
+    path = constants.WISP_USER_CONFIG_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('[general]\ndefault_provider = "oci"\n', encoding="utf-8")
+
+    settings.ensure_user_config()
+
+    assert 'default_provider = "oci"' in path.read_text(encoding="utf-8")
+
+
+def test_ensure_user_config_is_idempotent():
+    """Calling it repeatedly keeps a single, stable config file."""
+    first = settings.ensure_user_config()
+    second = settings.ensure_user_config()
+
+    assert first == second == constants.WISP_USER_CONFIG_PATH
+    assert constants.WISP_USER_CONFIG_PATH.is_file()
+
+
 def test_save_session_config_writes_to_user_config(tmp_path, monkeypatch):
     """save_session_config writes to WISP_USER_CONFIG_PATH."""
     cfg = tmp_path / "wisp.toml"

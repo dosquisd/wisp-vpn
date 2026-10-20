@@ -118,6 +118,37 @@ def get_active_config_path() -> Path:
     return WISP_USER_CONFIG_PATH
 
 
+_DEFAULT_CONFIG_HEADER = (
+    "# Wisp configuration file. All values are optional; defaults apply when\n"
+    "# omitted. Full example with every section documented:\n"
+    "# https://github.com/dosquisd/wisp-vpn/blob/main/wisp.toml.example\n"
+)
+
+
+def ensure_user_config() -> Path:
+    """Ensure the user-level ``wisp.toml`` exists, creating it when missing.
+
+    The single config location is :data:`WISP_USER_CONFIG_PATH`, and nothing
+    else creates it — so a fresh install or a wiped config directory would
+    otherwise leave the CLI running on pure defaults with no hint of where
+    settings belong. Creation is explicit (called from the CLI/TUI entry
+    points, never at import time) and never touches an existing file: user
+    edits are sacred.
+
+    Returns:
+        Path: The user config path, existing or freshly created.
+    """
+    from wisp.utils.platform import secure_file  # deferred: avoid import cycle
+
+    if WISP_USER_CONFIG_PATH.exists():
+        return WISP_USER_CONFIG_PATH
+
+    WISP_USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    WISP_USER_CONFIG_PATH.write_text(_DEFAULT_CONFIG_HEADER, encoding="utf-8")
+    secure_file(WISP_USER_CONFIG_PATH)
+    return WISP_USER_CONFIG_PATH
+
+
 def describe_config_sources() -> str:
     """Rich-markup one-liner naming the active wisp.toml, for TUI/log display.
 

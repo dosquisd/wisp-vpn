@@ -21,6 +21,8 @@ from wisp.config.credentials import (
     resolve_vps_credentials,
 )
 from wisp.config.settings import (
+    WISP_USER_CONFIG_PATH,
+    ensure_user_config,
     get_default_provider,
     get_default_region_for,
     load_wisp_config,
@@ -431,6 +433,12 @@ def main() -> None:
     region = args["region"]
     provider_option = args["provider"]
 
+    # Self-heal the single config file: a fresh install (or a wiped config
+    # directory) would otherwise run on pure defaults with no hint of where
+    # settings belong. Explicit call at the entry points — never an import-time
+    # side effect.
+    ensure_user_config()
+
     if command == CommandEnum.GC:
         _run_gc(destroy=args["gc_destroy"], refresh=args["gc_refresh"])
         sys.exit(0)
@@ -468,12 +476,20 @@ def main() -> None:
         sys.exit(0)
 
     if region is None:
-        region = provider.credentials.region
+        region = getattr(provider.credentials, "region", None)
 
-    # It's not neccesary to do this assertion, because the CLI will always provide a region, but it's a good safety check
-    assert region is not None, (
-        "Region must be specified for deploy or destroy commands."
-    )
+    # The region is optional for the VPS provider (nothing to provision), but
+    # the cloud providers must refuse to deploy without one: an empty string
+    # used to sail through to Pulumi and fail there with a cryptic provider
+    # error, leaving pending operations stuck in the stack state.
+    if provider_option != ProviderEnum.VPS and not region:
+        print(
+            f"No region configured for {provider_option.value}. Pass -r/--region, "
+            f"or set it under the [{provider_option.value}] section of "
+            f"{WISP_USER_CONFIG_PATH}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     logger.info(
         f"Running in CLI mode with command: {command}. "
