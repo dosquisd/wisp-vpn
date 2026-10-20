@@ -91,7 +91,7 @@ import time. The data directory is created with mode `0700`. The project-level
 
 | Constant | Value |
 | ---------- | ------- |
-| `DEFAULT_REGION` | `"us-east-2"` |
+| `DEFAULT_AWS_REGION` | `"us-east-2"` |
 | `DEFAULT_EC2_INSTANCE_TYPE` | `"t3.micro"` |
 | `DEFAULT_AMI_NAME` | `ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20260619` |
 | `DEFAULT_AMI_OWNER` | `"099720109477"` (Canonical) |

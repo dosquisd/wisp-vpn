@@ -69,7 +69,10 @@ src/wisp/
 Supporting non-Python assets at the repo root:
 
 ```text
-scripts/    wireguard-client-install.sh  # Client installer
+scripts/    install.sh                   # Self-contained bootstrap installer (uv + wisp-vpn + WireGuard
+                                         # + optional Pulumi + `sudo wisp daemon install` + install manifest)
+            uninstall.sh                 # Self-contained manifest-driven uninstaller
+            wireguard-client-install.sh  # Client installer
             utils.sh                     # Shared shell helpers (installWireGuardClient, etc.)
 setup.sh                                 # Linux installer: daemon (systemd), WireGuard tools, Pulumi
 setup.ps1                                # Windows installer: native service, WireGuard exe, Pulumi via winget

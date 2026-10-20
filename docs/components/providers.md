@@ -53,7 +53,7 @@ Subclasses implement `_create_pulumi_program(...)` and `get_available_regions()`
 
 ### `constants.py`
 
-`DEFAULT_REGION="us-east-2"`, `DEFAULT_EC2_INSTANCE_TYPE="t3.micro"`,
+`DEFAULT_AWS_REGION="us-east-2"`, `DEFAULT_EC2_INSTANCE_TYPE="t3.micro"`,
 `DEFAULT_AMI_NAME` (Ubuntu, gp3), `DEFAULT_AMI_OWNER="099720109477"` (Canonical).
 
 ### `pulumi.py` — the Pulumi program

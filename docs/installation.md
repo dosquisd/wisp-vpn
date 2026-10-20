@@ -1,5 +1,51 @@
 # Installation
 
+## Quick install (Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dosquisd/wisp-vpn/HEAD/scripts/install.sh | bash
+```
+
+The script is self-contained (a single downloaded file, no repo checkout
+needed). In order, it:
+
+1. Detects your distro and installs `curl` if missing.
+2. Installs `uv` if missing (uv brings its own Python 3.14, so nothing else
+   to set up).
+3. Installs the CLI with `uv tool install wisp-vpn` (refreshes it with
+   `--force` when already installed).
+4. Installs the WireGuard tools via the distro package manager.
+5. Installs the Pulumi CLI per-user under `~/.pulumi` unless `--skip-pulumi`
+   is passed.
+6. Delegates the privileged part to `sudo wisp daemon install` — systemd
+   units, the `wisp` group, and the re-login hint all come from the CLI
+   itself. The daemon runtime lives in a root-owned venv at
+   `/usr/local/lib/wisp/venv` (a root service must not execute user-mutable
+   code); it is removed again by `sudo wisp daemon uninstall`.
+7. Writes an `install-manifest.json` under the Wisp data dir, recording
+   which tools were already on the machine (`pre_existing`) and which the
+   script installed (`installed_by_wisp`), so the uninstaller knows what to
+   ask about.
+
+Preview everything without changing the system:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dosquisd/wisp-vpn/HEAD/scripts/install.sh | bash -s -- --dry-run
+```
+
+To uninstall, use the paired script. Run it via `bash <(...)` instead of a
+pipe so its confirmation prompts can read your terminal:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/dosquisd/wisp-vpn/HEAD/scripts/uninstall.sh)          # interactive
+bash <(curl -fsSL https://raw.githubusercontent.com/dosquisd/wisp-vpn/HEAD/scripts/uninstall.sh) --dry-run
+```
+
+It removes the daemon (`sudo wisp daemon uninstall`), the `wisp-vpn` tool,
+and the Wisp-owned data directories; tools the installer itself installed
+are removed after asking, and anything marked pre-existing in the manifest
+is left untouched.
+
 ## Requirements
 
 - Linux host for the client (macOS support is planned; the daemon uses systemd
@@ -145,9 +191,12 @@ existing service before reinstalling).
 
 ## Uninstall
 
-Destroy any live session first (`wisp destroy <provider>`) — uninstalling
+The quickest path on Linux is the uninstall script (see
+[Quick install](#quick-install-linux) for the one-liner). Destroy any live
+session first (`wisp destroy <provider>`) — uninstalling
 does not tear down cloud resources, and leftovers keep billing (`wisp gc`
-finds them afterwards as long as the Pulumi backend is reachable). Then:
+finds them afterwards as long as the Pulumi backend is reachable). The
+manual steps, should you prefer them:
 
 ```bash
 # Linux

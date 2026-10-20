@@ -12,11 +12,20 @@ the unprivileged frontend talks to it over a Unix socket (Linux) or Named Pipe
 `wisp.main`) installs, refreshes, and removes the daemon without running
 `setup.sh`/`setup.ps1`:
 
-- **Linux**: the systemd units ship as package data (`wisp/data/wisp.socket`
-  verbatim, `wisp/data/wisp.service.tpl` with an `{python_executable}`
-  placeholder) and are rendered with the running interpreter, so the daemon
-  runs under the same Python that installed Wisp. The command also creates the
-  `wisp` group and adds the invoking sudo user to it (re-login required).
+- **Linux**: the command first builds a **root-owned venv** at
+  `/usr/local/lib/wisp/venv` (base interpreter picked from a candidate
+  cascade — `python3.14`, `python3.13`, `python3.12`, `python3` — where the
+  first candidate that survives *create venv → `pip install wisp-vpn` →
+  `import wisp.daemon.server`* wins) and only then touches systemd. The units
+  ship as package data (`wisp/data/wisp.socket` verbatim,
+  `wisp/data/wisp.service.tpl` with an `{python_executable}` placeholder) and
+  are rendered with that venv's interpreter. The reason for the dedicated
+  venv: a root service must not execute user-mutable code — pointing
+  `ExecStart` at the invoking user's `uv tool` venv let that venv invalidate
+  itself under the user and systemd failed the service with `203/EXEC`
+  (live-verified). The command also creates the `wisp` group and adds the
+  invoking sudo user to it (re-login required). `uninstall` removes the units
+  together with the root-owned runtime directory.
 - **Windows**: dispatches to `wisp.daemon.windows_service`
   (`install` / `--startup auto update` / `remove`).
 - Any other platform: a clear "not supported" error.

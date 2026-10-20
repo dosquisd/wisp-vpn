@@ -38,17 +38,18 @@ with CWD-dependent paths would misbehave).
 - [X] Update `[project.urls]`
 - [X] Build check: `uv build` and inspect wheel contents (script present,
   no CWD assumptions)
-- [ ] First release tag + changelog
+- [X] First release tag + changelog
 
 ## Install bootstrap script (`.sh` / `.ps1`)
 
 Depends on PyPI. Pattern: `curl -fsSL <url>/install.sh | bash`.
 
-- [ ] Install `uv` if missing
-- [ ] `uv tool install wisp-vpn`
-- [ ] WireGuard tools + Pulumi CLI (or defer to `sudo wisp daemon install`)
-- [ ] Delegate the privileged part to `sudo wisp daemon install` (single
-  source of truth; `setup.sh`/`setup.ps1` become thin wrappers)
+- [X] Install `uv` if missing
+- [X] `uv tool install wisp-vpn`
+- [X] WireGuard tools + Pulumi CLI (or defer to `sudo wisp daemon install`)
+- [X] Delegate the privileged part to `sudo wisp daemon install` (single
+  source of truth; `setup.sh` as a thin wrapper is still tracked in the
+  `wisp daemon install` section below)
 - [ ] Windows equivalent (`setup.ps1` parity)
 
 ## `wisp doctor` (CLI diagnostics)

@@ -89,6 +89,36 @@ session guard arms *before* provisioning starts, so a crashed TUI still
 leaves a marker behind — the next run offers to clean it up, and the optional
 TTL watchdog handles it even if nobody reopens Wisp.
 
+## Install (from PyPI)
+
+Wisp is published on PyPI as **[`wisp-vpn`](https://pypi.org/project/wisp-vpn/)** —
+it needs Python **3.14+** (with `uv`, Python itself is managed for you).
+
+On Linux, the one-command installer sets everything up (uv, the `wisp-vpn`
+CLI, WireGuard tools, the optional Pulumi CLI, and the privileged daemon):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dosquisd/wisp-vpn/HEAD/scripts/install.sh | bash
+```
+
+Rather manage the CLI yourself with your tool manager of choice?
+
+```bash
+uv tool install wisp-vpn      # uv manages its own Python
+# or
+pipx install wisp-vpn         # uses your system Python — it must be 3.12+
+```
+
+Then add the privileged daemon (and WireGuard tools, which the one-command
+installer covers for you):
+
+```bash
+sudo wisp daemon install
+```
+
+See the [installation guide](https://github.com/dosquisd/wisp-vpn/tree/main/docs/installation.md#quick-install-linux)
+for `--skip-pulumi` / `--dry-run` flags and the uninstall script.
+
 ## Install (from source)
 
 Requirements: Python **3.14+** (if you install via `uv`, it manages Python for
@@ -111,8 +141,9 @@ sudo ./setup.sh            # Linux; or: sudo ./setup.sh --skip-pulumi
 Then log out and back in (or `newgrp wisp`) so your `wisp` group membership
 takes effect. macOS is not supported yet (the daemon adapter is not
 implemented — see `MacOSAdapter` in
-[`daemon/adapter.py`](https://github.com/dosquisd/wisp-vpn/src/wisp/daemon/adapter.py)). A published PyPI package
-with a one-command installer is planned.
+[`daemon/adapter.py`](https://github.com/dosquisd/wisp-vpn/src/wisp/daemon/adapter.py)).
+The PyPI package with the one-command installer above is the recommended
+path; the steps in this section are for a source checkout.
 
 ## Quick start
 

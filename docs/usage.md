@@ -128,20 +128,25 @@ Installs or removes the privileged local daemon that the frontend talks to
 manages the daemon on its own). Requires root/sudo on Linux and an elevated
 terminal on Windows.
 
-- **Linux** (systemd, socket-activated): writes `/etc/systemd/system/wisp.socket`
-  and `wisp.service` (rendered from package data with the Python interpreter
-  that is running Wisp), creates the `wisp` group that owns `/run/wisp.sock`,
-  enables and starts the socket, and — when run under `sudo` — adds your user
-  to the `wisp` group. **Log out and back in** (or `newgrp wisp`) so the group
-  membership takes effect. Re-running `install` refreshes the units: it stops
-  and disables any existing units first.
+- **Linux** (systemd, socket-activated): builds a root-owned venv at
+  `/usr/local/lib/wisp/venv` with `wisp-vpn` installed into it (validated
+  before anything systemd-related runs — a root service must not execute
+  user-mutable code, which is why the invoking user's `uv tool` venv is never
+  used), writes `/etc/systemd/system/wisp.socket` and `wisp.service` (rendered
+  from package data with that venv's interpreter), creates the `wisp` group
+  that owns `/run/wisp.sock`, enables and starts the socket, and — when run
+  under `sudo` — adds your user to the `wisp` group. **Log out and back in**
+  (or `newgrp wisp`) so the group membership takes effect. Re-running
+  `install` refreshes the units: it stops and disables any existing units
+  first.
 - **Windows**: installs the native service via the pywin32 wrapper and sets it
   to start automatically (`uninstall` removes it).
 
-`uninstall` disables and deletes the two systemd units (Linux) and runs
-`systemctl daemon-reload`/`reset-failed`. The `wisp` **group is kept** — other
-members or local data may still depend on it; remove it manually with
-`sudo groupdel wisp` if nothing else needs it.
+`uninstall` disables and deletes the two systemd units and removes the
+root-owned daemon runtime at `/usr/local/lib/wisp` (Linux), then runs
+`systemctl daemon-reload`/`reset-failed`. The `wisp` **group is kept** — its
+lifecycle (remove vs keep) belongs to the `scripts/uninstall.sh` bootstrap,
+which records in the install manifest whether the group was created by Wisp.
 
 ```bash
 sudo wisp daemon install
