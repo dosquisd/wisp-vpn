@@ -3,7 +3,7 @@ name = "wisp-vpn"
 version = "0.1.0"
 description = "Wisp — ephemeral WireGuard VPNs on your own cloud"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 authors = [
   { name="dosquisd", email="pereznjuandiego@gmail.com" },
   { name="SantiagoQP31", email="santiagoqp3103@gmail.com" },
@@ -36,7 +36,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Internet",
     "Topic :: System :: Networking",
     "Topic :: System :: Systems Administration",
@@ -65,7 +65,7 @@ package = true
 exclude = [".git", ".pytest_cache", ".venv"]
 line-length = 88
 indent-width = 4
-target-version = "py314"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]

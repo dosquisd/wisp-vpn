@@ -70,7 +70,7 @@ class ActiveSession(dict):
         """PID of the process that created the session."""
         try:
             return int(self.get("pid", 0))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):  # fmt: skip
             return 0
 
     @property
@@ -78,7 +78,7 @@ class ActiveSession(dict):
         """Unix timestamp of when the session was created."""
         try:
             return float(self.get("started_at", 0.0))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):  # fmt: skip
             return 0.0
 
     @property
@@ -429,7 +429,7 @@ def _exit_after_signal(signum: int) -> None:
     _leave_alternate_screen()
     try:
         os._exit(128 + int(signum))
-    except OverflowError, TypeError, ValueError:
+    except (OverflowError, TypeError, ValueError):  # fmt: skip
         os._exit(1)
 
 
