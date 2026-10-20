@@ -1,6 +1,6 @@
 [project]
 name = "wisp-vpn"
-version = "0.1.0"
+version = "0.1.1"
 description = "Wisp — ephemeral WireGuard VPNs on your own cloud"
 readme = "README.md"
 requires-python = ">=3.12"
