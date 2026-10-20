@@ -308,6 +308,37 @@ remove_wireguard_packages() {
     esac
 }
 
+# The daemon's adapter writes /etc/wireguard/wg0.conf on connect and brings
+# the interface down on disconnect, but never removes the file — and it holds
+# the client's private key, so it must not outlive Wisp. The interface name is
+# hardcoded in the adapter (not read from wisp.toml), which makes this
+# artifact deterministic; any other file under /etc/wireguard belongs to
+# whatever else the user runs and is never touched here.
+cleanup_wireguard_artifacts() {
+    local conf="/etc/wireguard/wg0.conf"
+    [[ -e "$conf" ]] || {
+        info "No ${conf} present; nothing to clean."
+        return 0
+    }
+    if $DRY_RUN; then
+        plan "sudo wg-quick down wg0 (best effort; ignored when the tunnel is down)"
+        if $ASSUME_YES; then
+            plan "sudo rm ${conf} (holds the client private key)"
+        else
+            info "Would ask: 'Remove ${conf} (it holds the client private key)? [Y/n]' (default: remove)"
+        fi
+        return 0
+    fi
+    # Best effort: the tunnel may already be down or the interface missing.
+    run_priv wg-quick down wg0 || true
+    if $ASSUME_YES || ask "Remove ${conf} (it holds the client private key)? [Y/n] "; then
+        run_priv rm -f "$conf"
+        info "Removed ${conf}."
+    else
+        warn "Kept ${conf} — it still holds the client private key."
+    fi
+}
+
 remove_pulumi_path_lines() {
     local profile
     for profile in "$USER_HOME/.profile" "$USER_HOME/.bashrc"; do
@@ -547,6 +578,7 @@ main() {
     fi
 
     uninstall_daemon
+    cleanup_wireguard_artifacts
     uninstall_wisp_tool
     handle_tools
     handle_group
