@@ -2,10 +2,22 @@
 
 Provides the ``wisp daemon install`` / ``wisp daemon uninstall`` commands:
 
-- **Linux**: renders the systemd units from package data (the service unit's
-  ``ExecStart`` points at the Python interpreter that is running Wisp) and
-  installs them into ``/etc/systemd/system`` as a socket-activated service,
-  creating the ``wisp`` group and adding the invoking sudo user to it.
+- **Linux**: builds a **root-owned venv** at ``/usr/local/lib/wisp/venv``,
+  installs ``wisp-vpn`` into it, and validates that the venv's interpreter
+  actually imports ``wisp.daemon.server`` *before* touching systemd. The base
+  interpreter is picked from a candidate cascade (``python3.14``, then
+  ``python3.13``, ``python3.12``, then ``python3``): the first candidate that
+  survives *create venv → pip install → import the server* wins, and each
+  failed attempt's half-built venv is removed before the next is tried. The
+  service unit's ``ExecStart`` points at that venv's interpreter — never at
+  the interpreter running Wisp. Reason (live-verified): a root service must
+  not execute user-mutable code; pointing ``ExecStart`` at the invoking
+  user's ``uv tool`` venv let that venv invalidate itself under the user and
+  systemd failed the service with ``203/EXEC``. After validation the units
+  are rendered from package data and installed into ``/etc/systemd/system``
+  as a socket-activated service, creating the ``wisp`` group and adding the
+  invoking sudo user to it. ``uninstall`` removes the units and the
+  root-owned venv directory.
 - **Windows**: dispatches to the pywin32 service wrapper
   (``wisp.daemon.windows_service``) to install/update/remove the native
   service.
@@ -28,6 +40,18 @@ from wisp.utils import PlatformEnum, logger
 #: Target directory for the systemd units (module-level constant so tests can
 #: redirect it; override by monkeypatching, not by parameter).
 LINUX_UNIT_DIR = Path("/etc/systemd/system")
+
+#: Root-owned installation directory for the daemon runtime; the daemon venv
+#: lives at ``LINUX_INSTALL_DIR / "venv"``. The systemd unit executes the
+#: interpreter inside this venv, never the invoking user's ``uv tool`` venv:
+#: a root service must not depend on user-mutable code (the user-writable
+#: uv tool venv invalidated itself under the service and systemd failed with
+#: ``203/EXEC``). Module-level constant so tests can redirect it; override by
+#: monkeypatching, not by parameter.
+LINUX_INSTALL_DIR = Path("/usr/local/lib/wisp")
+
+#: PyPI distribution installed into the daemon venv.
+WISP_PACKAGE = "wisp-vpn"
 
 #: Probe that tells whether this machine runs systemd (systemd creates it on
 #: every booted system; monkeypatchable in tests).
@@ -171,6 +195,99 @@ def _wireguard_missing_linux() -> list[str]:
     return [tool for tool in ("wg", "wg-quick") if shutil.which(tool) is None]
 
 
+def _linux_install_dir() -> Path:
+    """Resolve the root-owned daemon runtime directory at call time.
+
+    Indirection keeps ``LINUX_INSTALL_DIR`` monkeypatchable from tests and
+    tolerates either a ``Path`` or a string being patched in.
+
+    Returns:
+        Path: The install directory (default ``/usr/local/lib/wisp``); the
+        daemon venv lives at ``<dir> / "venv"``.
+    """
+    return Path(LINUX_INSTALL_DIR)
+
+
+def _venv_base_candidates() -> list[str]:
+    """Return the base-interpreter candidates for the daemon venv, in order.
+
+    Probes the well-known interpreter names (newest first) and keeps only the
+    ones actually on ``PATH``. There is no hard-coded version floor here: pip
+    enforces the package's ``requires-python`` at install time, so the
+    cascade self-adapts when the supported range changes.
+
+    Returns:
+        list[str]: Interpreter names found on ``PATH``, in preference order
+        (``python3.14``, ``python3.13``, ``python3.12``, ``python3``).
+    """
+    names = ("python3.14", "python3.13", "python3.12", "python3")
+    return [name for name in names if shutil.which(name) is not None]
+
+
+def _discard_daemon_venv(venv_dir: Path) -> None:
+    """Remove a half-built daemon venv (best effort, never raises).
+
+    Args:
+        venv_dir (Path): Directory of the venv being discarded.
+    """
+    shutil.rmtree(venv_dir, ignore_errors=True)
+
+
+def _build_daemon_venv(venv_dir: Path) -> str | None:
+    """Build the root-owned daemon venv from the first workable interpreter.
+
+    Iterates the candidates from :func:`_venv_base_candidates` in order; for
+    each one it creates the venv, installs ``wisp-vpn`` into it, and
+    validates that the venv's interpreter imports ``wisp.daemon.server``.
+    The first candidate that survives all three steps wins. A candidate that
+    fails at any step has its half-built venv removed (best effort), the
+    reason is logged at DEBUG, and the next candidate is tried.
+
+    Args:
+        venv_dir (Path): Target directory of the daemon venv.
+
+    Returns:
+        str | None: Path of the winning venv interpreter, or ``None`` when no
+        candidate produced a working venv (the caller must abort before any
+        systemd-related work).
+    """
+    venv_python = venv_dir / "bin" / "python"
+    venv_pip = venv_dir / "bin" / "pip"
+    for candidate in _venv_base_candidates():
+        logger.debug("Trying base interpreter %s for the daemon venv", candidate)
+        created = _run([candidate, "-m", "venv", str(venv_dir)])
+        if created.returncode != 0:
+            logger.debug(
+                "venv creation with %s failed: %s",
+                candidate,
+                created.stderr.strip() or "unknown error",
+            )
+            _discard_daemon_venv(venv_dir)
+            continue
+        installed = _run([str(venv_pip), "install", "--upgrade", "pip", WISP_PACKAGE])
+        if installed.returncode != 0:
+            logger.debug(
+                "pip install into the venv from %s failed: %s",
+                candidate,
+                installed.stderr.strip() or "unknown error",
+            )
+            _discard_daemon_venv(venv_dir)
+            continue
+        # Fail fast: the venv must be able to import the server before
+        # anything systemd-related runs and before any unit file is written.
+        validated = _run([str(venv_python), "-c", "import wisp.daemon.server"])
+        if validated.returncode != 0:
+            logger.debug(
+                "the venv from %s cannot import the server: %s",
+                candidate,
+                validated.stderr.strip() or "unknown error",
+            )
+            _discard_daemon_venv(venv_dir)
+            continue
+        return str(venv_python)
+    return None
+
+
 def _wireguard_missing_windows() -> list[str]:
     """Return the WireGuard tools missing on Windows.
 
@@ -200,7 +317,7 @@ def _is_windows_admin() -> bool:
         import ctypes
 
         return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
-    except ImportError, AttributeError, OSError:
+    except (ImportError, AttributeError, OSError):  # fmt: skip
         return False
 
 
@@ -271,6 +388,11 @@ def uninstall_daemon() -> int:
 def _install_linux() -> int:
     """Install the systemd units and group on Linux.
 
+    Builds a root-owned venv under :data:`LINUX_INSTALL_DIR`, installs the
+    ``wisp-vpn`` package into it, validates the venv imports the daemon
+    server, and only then writes the systemd units (whose ``ExecStart``
+    points at the venv's interpreter) and configures the group.
+
     Returns:
         int: ``0`` on success, nonzero on failure.
     """
@@ -291,6 +413,26 @@ def _install_linux() -> int:
     if missing_tools:
         _wireguard_warning(missing_tools)
 
+    # The daemon must execute root-owned, stable code: build a dedicated venv
+    # under LINUX_INSTALL_DIR instead of pointing ExecStart at the invoking
+    # user's uv tool venv (user-mutable state that invalidated itself live
+    # and failed the service with 203/EXEC). This must succeed before any
+    # systemd-related work happens.
+    venv_dir = _linux_install_dir() / "venv"
+    try:
+        venv_dir.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _print_stderr(f"Could not create {venv_dir.parent}: {exc}")
+        return 1
+    venv_python = _build_daemon_venv(venv_dir)
+    if venv_python is None:
+        _print_stderr(
+            "No suitable Python interpreter found to build the daemon venv; "
+            "wisp-vpn's requires-python must be satisfiable — install a "
+            "newer Python and re-run."
+        )
+        return 1
+
     # Ensure the socket's group exists (getent guard: skip when present).
     lookup = _run(["getent", "group", WISP_GROUP])
     members = _parse_group_members(lookup.stdout) if lookup.returncode == 0 else set()
@@ -304,9 +446,10 @@ def _install_linux() -> int:
             return 1
         print(f"Created group '{WISP_GROUP}'.")
 
-    # Render both units from package data with the running interpreter.
+    # Render both units from package data, pointing ExecStart at the
+    # root-owned venv's interpreter.
     try:
-        service_unit = render_service_unit(sys.executable)
+        service_unit = render_service_unit(str(venv_python))
         socket_unit = load_socket_unit()
     except FileNotFoundError as exc:
         _print_stderr(f"Could not read packaged unit templates: {exc}")
@@ -380,10 +523,15 @@ def _install_linux() -> int:
 
 
 def _uninstall_linux() -> int:
-    """Remove the systemd units on Linux (the group is kept).
+    """Remove the systemd units and the root-owned daemon venv on Linux.
+
+    The ``wisp`` group is deliberately kept: its lifecycle (create vs remove)
+    belongs to the install/uninstall scripts, which record and consult the
+    install manifest.
 
     Returns:
-        int: ``0`` on success, nonzero only when the root check fails.
+        int: ``0`` on success, nonzero only when the root check or the unit
+        removal fails (a venv-removal failure is reported but non-fatal).
     """
     if os.geteuid() != 0:
         _print_stderr(
@@ -412,6 +560,20 @@ def _uninstall_linux() -> int:
     # Best effort: make systemd forget the removed units and any failure state.
     _run(["systemctl", "daemon-reload"], ignore_failure=True)
     _run(["systemctl", "reset-failed"], ignore_failure=True)
+
+    # Remove the root-owned daemon runtime (its venv) with the units: it was
+    # created by `wisp daemon install` and nothing else depends on it. A
+    # removal failure is reported but non-fatal (the units are already gone).
+    install_dir = _linux_install_dir()
+    if install_dir.exists():
+        try:
+            shutil.rmtree(install_dir)
+            removed.append(str(install_dir))
+        except OSError as exc:
+            _print_stderr(
+                f"Could not remove the daemon runtime directory "
+                f"{install_dir}: {exc} — remove it manually."
+            )
 
     if removed:
         print("Removed:")

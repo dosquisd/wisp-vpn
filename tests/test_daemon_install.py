@@ -62,10 +62,65 @@ def runner(monkeypatch: pytest.MonkeyPatch) -> FakeRunner:
     return fake
 
 
+class VenvSimulatingRunner(FakeRunner):
+    """FakeRunner that also simulates successful venv creation.
+
+    When an unmatched ``<interpreter> -m venv <dir>`` call succeeds, the
+    target directory is actually created, so tests can assert cleanup of
+    half-built venvs.
+    """
+
+    def __call__(
+        self, cmd: list[str], *, ignore_failure: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        self.calls.append(list(cmd))
+        for prefix, result in self.results.items():
+            if cmd[: len(prefix)] == list(prefix):
+                return result
+        if len(cmd) > 3 and cmd[1:3] == ["-m", "venv"]:
+            Path(cmd[3]).mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+
 @pytest.fixture
 def as_root(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the Linux paths believe the process runs as root."""
     monkeypatch.setattr(daemon_install.os, "geteuid", lambda: 0)
+
+
+@pytest.fixture
+def linux_env(
+    runner: FakeRunner, as_root: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Path:
+    """Patch the Linux install preconditions; return the unit directory.
+
+    Redirects the unit dir and the daemon runtime dir into ``tmp_path``,
+    fakes systemd availability, no missing WireGuard tools, and a single
+    fake base interpreter for the daemon venv.
+    """
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", unit_dir)
+    monkeypatch.setattr(daemon_install, "LINUX_INSTALL_DIR", tmp_path / "opt")
+    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
+    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
+    monkeypatch.setattr(
+        daemon_install, "_venv_base_candidates", lambda: ["fake-python"]
+    )
+    return unit_dir
+
+
+def venv_paths(install_dir: Path) -> tuple[Path, Path, Path]:
+    """Return ``(venv_dir, venv_python, venv_pip)`` for an install dir."""
+    venv_dir = install_dir / "venv"
+    return venv_dir, venv_dir / "bin" / "python", venv_dir / "bin" / "pip"
+
+
+def units_written(unit_dir: Path) -> bool:
+    """Return whether both systemd unit files exist in ``unit_dir``."""
+    return (unit_dir / "wisp.socket").is_file() and (
+        unit_dir / "wisp.service"
+    ).is_file()
 
 
 # --- Template rendering (package data) --------------------------------------
@@ -109,25 +164,27 @@ def test_run_captures_output_and_does_not_raise() -> None:
 
 
 def test_install_linux_fresh_creates_group_and_units(
+    linux_env: Path,
     runner: FakeRunner,
     as_root: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path)
-    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
-    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
     monkeypatch.setenv("SUDO_USER", "testuser")
     # getent fails: the group does not exist yet.
     runner.results = {
         ("getent",): subprocess.CompletedProcess([], 2, stdout="", stderr="")
     }
+    venv_dir, venv_python, venv_pip = venv_paths(tmp_path / "opt")
 
     exit_code = install_daemon()
 
     assert exit_code == 0
     assert runner.commands() == [
+        ["fake-python", "-m", "venv", str(venv_dir)],
+        [str(venv_pip), "install", "--upgrade", "pip", "wisp-vpn"],
+        [str(venv_python), "-c", "import wisp.daemon.server"],
         ["getent", "group", "wisp"],
         ["groupadd", "wisp"],
         ["systemctl", "daemon-reload"],
@@ -137,12 +194,12 @@ def test_install_linux_fresh_creates_group_and_units(
     ]
     # No stop/disable: the target dir had no prior units.
     assert not any(call[:2] == ["systemctl", "stop"] for call in runner.commands())
-    socket_file = tmp_path / "wisp.socket"
-    service_file = tmp_path / "wisp.service"
+    socket_file = linux_env / "wisp.socket"
+    service_file = linux_env / "wisp.service"
     assert socket_file.is_file()
     assert service_file.is_file()
     assert socket_file.read_text(encoding="utf-8") == load_socket_unit()
-    assert f"ExecStart={sys.executable} -m wisp.daemon.server" in (
+    assert f"ExecStart={venv_python} -m wisp.daemon.server" in (
         service_file.read_text(encoding="utf-8")
     )
     out = capsys.readouterr().out
@@ -151,13 +208,14 @@ def test_install_linux_fresh_creates_group_and_units(
 
 
 def test_install_linux_refreshes_existing_units(
-    runner: FakeRunner, as_root: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    linux_env: Path,
+    runner: FakeRunner,
+    as_root: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path)
-    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
-    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
-    (tmp_path / "wisp.socket").write_text("old", encoding="utf-8")
-    (tmp_path / "wisp.service").write_text("old", encoding="utf-8")
+    (linux_env / "wisp.socket").write_text("old", encoding="utf-8")
+    (linux_env / "wisp.service").write_text("old", encoding="utf-8")
     monkeypatch.delenv("SUDO_USER", raising=False)
     # getent succeeds with testuser already a member.
     runner.results = {
@@ -165,12 +223,18 @@ def test_install_linux_refreshes_existing_units(
             [], 0, stdout="wisp:x:4242:testuser\n", stderr=""
         )
     }
+    venv_dir, venv_python, venv_pip = venv_paths(tmp_path / "opt")
 
     exit_code = install_daemon()
 
     assert exit_code == 0
     commands = runner.commands()
-    assert commands[0] == ["getent", "group", "wisp"]
+    assert commands[:4] == [
+        ["fake-python", "-m", "venv", str(venv_dir)],
+        [str(venv_pip), "install", "--upgrade", "pip", "wisp-vpn"],
+        [str(venv_python), "-c", "import wisp.daemon.server"],
+        ["getent", "group", "wisp"],
+    ]
     assert ["systemctl", "stop", "wisp.service", "wisp.socket"] in commands
     assert ["systemctl", "disable", "wisp.service", "wisp.socket"] in commands
     assert commands[-3:] == [
@@ -181,19 +245,16 @@ def test_install_linux_refreshes_existing_units(
     # Group exists and user is already a member: no groupadd, no usermod.
     assert not any(call[0] == "groupadd" for call in commands)
     assert not any(call[0] == "usermod" for call in commands)
-    assert (tmp_path / "wisp.service").read_text(encoding="utf-8") != "old"
+    assert (linux_env / "wisp.service").read_text(encoding="utf-8") != "old"
 
 
 def test_install_linux_without_sudo_user_prints_manual_instruction(
+    linux_env: Path,
     runner: FakeRunner,
     as_root: None,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path)
-    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
-    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
     monkeypatch.delenv("SUDO_USER", raising=False)
 
     exit_code = install_daemon()
@@ -220,30 +281,33 @@ def test_install_linux_requires_root(
 
 
 def test_install_linux_fails_when_groupadd_fails(
+    linux_env: Path,
+    runner: FakeRunner,
     as_root: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runner = FakeRunner(
-        {
-            ("getent",): subprocess.CompletedProcess([], 2, stdout="", stderr=""),
-            ("groupadd",): subprocess.CompletedProcess(
-                [], 1, stdout="", stderr="cannot create group"
-            ),
-        }
-    )
-    monkeypatch.setattr(daemon_install, "_run", runner)
-    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path)
-    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
-    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
+    runner.results = {
+        ("getent",): subprocess.CompletedProcess([], 2, stdout="", stderr=""),
+        ("groupadd",): subprocess.CompletedProcess(
+            [], 1, stdout="", stderr="cannot create group"
+        ),
+    }
+    venv_dir, venv_python, venv_pip = venv_paths(tmp_path / "opt")
 
     exit_code = install_daemon()
 
     assert exit_code == 1
     assert "cannot create group" in capsys.readouterr().err
     # Nothing was executed after the failed group creation.
-    assert runner.commands() == [["getent", "group", "wisp"], ["groupadd", "wisp"]]
+    assert runner.commands() == [
+        ["fake-python", "-m", "venv", str(venv_dir)],
+        [str(venv_pip), "install", "--upgrade", "pip", "wisp-vpn"],
+        [str(venv_python), "-c", "import wisp.daemon.server"],
+        ["getent", "group", "wisp"],
+        ["groupadd", "wisp"],
+    ]
 
 
 def test_install_linux_requires_systemd(
@@ -263,14 +327,12 @@ def test_install_linux_requires_systemd(
 
 
 def test_install_linux_warns_when_wireguard_missing(
+    linux_env: Path,
     runner: FakeRunner,
     as_root: None,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path)
-    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
     monkeypatch.setattr(
         daemon_install, "_wireguard_missing_linux", lambda: ["wg", "wg-quick"]
     )
@@ -324,15 +386,12 @@ def test_install_windows_warns_when_wireguard_missing(
 
 
 def test_install_linux_fails_when_service_restart_fails(
+    linux_env: Path,
     runner: FakeRunner,
     as_root: None,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path)
-    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
-    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
     monkeypatch.delenv("SUDO_USER", raising=False)
     runner.results = {
         ("systemctl", "restart"): subprocess.CompletedProcess(
@@ -350,19 +409,193 @@ def test_install_linux_fails_when_service_restart_fails(
     assert not any(call[0] == "usermod" for call in runner.commands())
 
 
-# --- Linux uninstall flow ----------------------------------------------------
+# --- Daemon venv candidate cascade -------------------------------------------
 
 
-def test_uninstall_linux_removes_units_and_keeps_group(
+def test_install_linux_all_candidates_fail_aborts_before_systemd(
     runner: FakeRunner,
     as_root: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path)
-    (tmp_path / "wisp.socket").write_text("unit", encoding="utf-8")
-    (tmp_path / "wisp.service").write_text("unit", encoding="utf-8")
+    unit_dir = tmp_path / "units"
+    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", unit_dir)
+    monkeypatch.setattr(daemon_install, "LINUX_INSTALL_DIR", tmp_path / "opt")
+    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
+    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
+    monkeypatch.setattr(
+        daemon_install, "_venv_base_candidates", lambda: ["fake-a", "fake-b"]
+    )
+    runner.results = {
+        ("fake-a",): subprocess.CompletedProcess([], 1, stdout="", stderr="boom-a"),
+        ("fake-b",): subprocess.CompletedProcess([], 1, stdout="", stderr="boom-b"),
+    }
+
+    exit_code = install_daemon()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "No suitable Python interpreter found" in captured.err
+    assert "install a newer Python and re-run" in captured.err
+    # Fail-fast guarantee: no systemd command ran and no unit file was written.
+    assert not any(call[0] == "systemctl" for call in runner.commands())
+    assert not any(call[0] == "getent" for call in runner.commands())
+    assert list(unit_dir.glob("*")) == []
+
+
+def test_install_linux_second_candidate_succeeds(
+    as_root: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = VenvSimulatingRunner(
+        {
+            # The first candidate fails at venv creation; the second works.
+            ("fake-a",): subprocess.CompletedProcess([], 1, stdout="", stderr="boom-a"),
+        }
+    )
+    monkeypatch.setattr(daemon_install, "_run", runner)
+    (tmp_path / "units").mkdir()
+    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path / "units")
+    monkeypatch.setattr(daemon_install, "LINUX_INSTALL_DIR", tmp_path / "opt")
+    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
+    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
+    monkeypatch.setattr(
+        daemon_install, "_venv_base_candidates", lambda: ["fake-a", "fake-b"]
+    )
+    venv_dir, venv_python, venv_pip = venv_paths(tmp_path / "opt")
+
+    exit_code = install_daemon()
+
+    assert exit_code == 0
+    commands = runner.commands()
+    # Both candidates attempted venv creation, in order; only the winner's
+    # venv survives on disk.
+    assert commands.count(["fake-a", "-m", "venv", str(venv_dir)]) == 1
+    assert commands.count(["fake-b", "-m", "venv", str(venv_dir)]) == 1
+    assert commands.index(["fake-a", "-m", "venv", str(venv_dir)]) < commands.index(
+        ["fake-b", "-m", "venv", str(venv_dir)]
+    )
+    # pip install + validation ran once, for the winning candidate.
+    pip_cmd = [str(venv_pip), "install", "--upgrade", "pip", "wisp-vpn"]
+    assert commands.count(pip_cmd) == 1
+    assert commands.count([str(venv_python), "-c", "import wisp.daemon.server"]) == 1
+    assert venv_dir.is_dir()
+    assert units_written(tmp_path / "units")
+
+
+@pytest.mark.parametrize(
+    ("fail_stage", "failing_prefix"),
+    [
+        ("creation", "venv"),
+        ("pip-install", "pip"),
+        ("validation", "python"),
+    ],
+)
+def test_install_linux_candidate_fails_cleaned_up(
+    fail_stage: str,
+    failing_prefix: str,
+    as_root: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = VenvSimulatingRunner()
+    monkeypatch.setattr(daemon_install, "_run", runner)
+    (tmp_path / "units").mkdir()
+    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path / "units")
+    monkeypatch.setattr(daemon_install, "LINUX_INSTALL_DIR", tmp_path / "opt")
+    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
+    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
+    monkeypatch.setattr(
+        daemon_install, "_venv_base_candidates", lambda: ["fake-python"]
+    )
+    venv_dir, venv_python, venv_pip = venv_paths(tmp_path / "opt")
+    match failing_prefix:
+        case "venv":
+            runner.results = {
+                ("fake-python", "-m", "venv"): subprocess.CompletedProcess(
+                    [], 1, stdout="", stderr="venv boom"
+                )
+            }
+        case "pip":
+            runner.results = {
+                (str(venv_pip),): subprocess.CompletedProcess(
+                    [], 1, stdout="", stderr="pip boom"
+                )
+            }
+        case "python":
+            runner.results = {
+                (str(venv_python), "-c"): subprocess.CompletedProcess(
+                    [], 1, stdout="", stderr="ModuleNotFoundError"
+                )
+            }
+
+    exit_code = install_daemon()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "No suitable Python interpreter found" in captured.err
+    # The half-built venv was discarded before giving up.
+    assert not venv_dir.exists()
+    assert not any(call[0] == "systemctl" for call in runner.commands())
+    assert list((tmp_path / "units").glob("*")) == []
+
+
+def test_install_linux_validation_failure_on_last_candidate_no_units(
+    as_root: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = VenvSimulatingRunner()
+    monkeypatch.setattr(daemon_install, "_run", runner)
+    (tmp_path / "units").mkdir()
+    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path / "units")
+    monkeypatch.setattr(daemon_install, "LINUX_INSTALL_DIR", tmp_path / "opt")
+    monkeypatch.setattr(daemon_install, "_systemd_available", lambda: True)
+    monkeypatch.setattr(daemon_install, "_wireguard_missing_linux", lambda: [])
+    monkeypatch.setattr(
+        daemon_install, "_venv_base_candidates", lambda: ["fake-python"]
+    )
+    venv_dir, venv_python, _ = venv_paths(tmp_path / "opt")
+    runner.results = {
+        (str(venv_python), "-c"): subprocess.CompletedProcess(
+            [], 1, stdout="", stderr="ModuleNotFoundError"
+        ),
+    }
+
+    exit_code = install_daemon()
+
+    assert exit_code == 1
+    assert "No suitable Python interpreter found" in capsys.readouterr().err
+    # Fail-fast guarantee on the LAST candidate: no systemctl commands and
+    # no unit files anywhere.
+    assert not any(call[0] == "systemctl" for call in runner.commands())
+    assert list((tmp_path / "units").glob("*")) == []
+    assert not venv_dir.exists()
+
+
+# --- Linux uninstall flow ----------------------------------------------------
+
+
+def test_uninstall_linux_removes_units_runtime_dir_and_keeps_group(
+    runner: FakeRunner,
+    as_root: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "units").mkdir()
+    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path / "units")
+    monkeypatch.setattr(daemon_install, "LINUX_INSTALL_DIR", tmp_path / "opt")
+    (tmp_path / "units" / "wisp.socket").write_text("unit", encoding="utf-8")
+    (tmp_path / "units" / "wisp.service").write_text("unit", encoding="utf-8")
+    venv_bin = tmp_path / "opt" / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("stub", encoding="utf-8")
 
     exit_code = uninstall_daemon()
 
@@ -372,17 +605,54 @@ def test_uninstall_linux_removes_units_and_keeps_group(
         ["systemctl", "daemon-reload"],
         ["systemctl", "reset-failed"],
     ]
-    assert not (tmp_path / "wisp.socket").exists()
-    assert not (tmp_path / "wisp.service").exists()
+    assert not (tmp_path / "units" / "wisp.socket").exists()
+    assert not (tmp_path / "units" / "wisp.service").exists()
+    # The root-owned daemon runtime is removed together with the units.
+    assert not (tmp_path / "opt").exists()
+    out = capsys.readouterr().out
+    assert str(tmp_path / "opt") in out
     # The wisp group is deliberately kept.
+    assert "was kept" in out
     assert not any(call[0] == "groupdel" for call in runner.commands())
-    assert "kept" in capsys.readouterr().out
+
+
+def test_uninstall_linux_reports_runtime_dir_removal_failure(
+    runner: FakeRunner,
+    as_root: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "units").mkdir()
+    monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path / "units")
+    monkeypatch.setattr(daemon_install, "LINUX_INSTALL_DIR", tmp_path / "opt")
+    (tmp_path / "units" / "wisp.socket").write_text("unit", encoding="utf-8")
+    (tmp_path / "units" / "wisp.service").write_text("unit", encoding="utf-8")
+    (tmp_path / "opt").mkdir()
+
+    def failing_rmtree(path, *args, **kwargs):
+        raise OSError("device busy")
+
+    monkeypatch.setattr(daemon_install.shutil, "rmtree", failing_rmtree)
+
+    exit_code = uninstall_daemon()
+
+    # Non-fatal: the units are already gone, only the runtime dir removal
+    # failed and is reported.
+    assert exit_code == 0
+    assert (tmp_path / "units" / "wisp.socket").exists() is False
+    assert (tmp_path / "units" / "wisp.service").exists() is False
+    assert (tmp_path / "opt").is_dir()
+    captured = capsys.readouterr()
+    assert "Could not remove the daemon runtime directory" in captured.err
+    assert "device busy" in captured.err
 
 
 def test_uninstall_linux_without_units_is_a_clean_noop(
     runner: FakeRunner, as_root: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(daemon_install, "LINUX_UNIT_DIR", tmp_path)
+    monkeypatch.setattr(daemon_install, "LINUX_INSTALL_DIR", tmp_path / "opt")
 
     exit_code = uninstall_daemon()
 
