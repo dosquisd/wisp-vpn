@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: ./.github/actions/setup-uv-env
 
       - name: Check formatting
@@ -32,6 +34,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: ./.github/actions/setup-uv-env
 
       - name: Run linter

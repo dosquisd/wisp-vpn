@@ -4,14 +4,10 @@ description: "Sets up the uv environment for the project"
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: Set up Python 3.14.3
+    - name: Set up Python 3.12.10
       uses: actions/setup-python@v5
       with:
-        python-version: "3.14.3"
+        python-version: "3.12.10"
 
     - name: Install uv
       uses: astral-sh/setup-uv@v6
