@@ -300,11 +300,8 @@ def _wireguard_missing_windows() -> list[str]:
     """
     if shutil.which("wg") and shutil.which("wg-quick"):
         return []
-    missing: list[str] = []
-    for tool in ("wg.exe", "wg-quick.exe"):
-        if not (_WINDOWS_WIREGUARD_DIR / tool).is_file():
-            missing.append(tool)
-    return missing
+    wireguard_exe = _WINDOWS_WIREGUARD_DIR / "wireguard.exe"
+    return [] if wireguard_exe.is_file() else ["wireguard.exe"]
 
 
 def _is_windows_admin() -> bool:
@@ -329,6 +326,32 @@ def _wireguard_warning(missing: list[str]) -> None:
     print("  Fedora/RHEL:   sudo dnf install wireguard-tools")
     print("  Arch:          sudo pacman -S wireguard-tools")
     print("  Windows:       https://www.wireguard.com/install/ (official MSI)")
+
+
+def _prepare_windows_service_runtime() -> bool:
+    """Copy pywin32 runtime DLLs beside the service interpreter.
+
+    pywin32 places ``pythonservice.exe`` and its DLL dependencies under
+    ``pywin32_system32``. A service launched from a uv tool environment does
+    not reliably search that directory, so keep the runtime DLLs beside the
+    interpreter before registering the service.
+
+    Returns:
+        bool: True when preparation succeeds, otherwise False.
+    """
+    venv_dir = Path(sys.executable).parent.parent
+    dll_dir = venv_dir / "Lib" / "site-packages" / "pywin32_system32"
+    if not dll_dir.is_dir():
+        _print_stderr(f"Could not find pywin32 runtime directory: {dll_dir}")
+        return False
+
+    try:
+        for dll in dll_dir.glob("*.dll"):
+            shutil.copy2(dll, venv_dir / dll.name)
+    except OSError as exc:
+        _print_stderr(f"Could not prepare the pywin32 runtime: {exc}")
+        return False
+    return True
 
 
 def _detect_platform() -> PlatformEnum:
@@ -606,6 +629,8 @@ def _install_windows() -> int:
     missing_tools = _wireguard_missing_windows()
     if missing_tools:
         _wireguard_warning(missing_tools)
+    if not _prepare_windows_service_runtime():
+        return 1
 
     install_result = _run(
         [sys.executable, "-m", "wisp.daemon.windows_service", "install"]
