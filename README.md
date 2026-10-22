@@ -116,16 +116,37 @@ installer covers for you):
 sudo wisp daemon install
 ```
 
-See the [installation guide](https://github.com/dosquisd/wisp-vpn/tree/main/docs/installation.md#quick-install-linux)
-for `--skip-pulumi` / `--dry-run` flags and the uninstall script.
+On Windows, the self-contained PowerShell installer needs no repository
+checkout:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+irm https://raw.githubusercontent.com/dosquisd/wisp-vpn/HEAD/scripts/install.ps1 | iex
+```
+
+This installs WireGuard, Pulumi, the Wisp daemon, and its native Windows
+service. To skip Pulumi, use `.\scripts\install.ps1 -SkipPulumi` from a local
+checkout. To remove Wisp later while preserving shared tools and user data:
+
+```powershell
+irm https://raw.githubusercontent.com/dosquisd/wisp-vpn/HEAD/scripts/uninstall.ps1 | iex
+```
+
+The uninstaller removes the Wisp daemon, CLI, group, user data, and
+dependencies that the Wisp installer originally installed. Dependencies that
+were already present are preserved. Destroy any active session before
+uninstalling; uninstalling the client does not remove cloud resources.
+
+See the [installation guide](https://github.com/dosquisd/wisp-vpn/tree/main/docs/installation.md#quick-install-windows)
+for Linux flags and the Windows install/uninstall options.
 
 ## Install (from source)
 
 Requirements: Python **3.12+** (with `uv`, Python itself is managed for you —
 you never see this requirement), the
 [Pulumi CLI](https://www.pulumi.com/docs/install/), and WireGuard tools — the
-one-command installer above covers both on Linux; `setup.ps1` covers them on
-Windows.
+one-command installer above covers both on Linux; `scripts/install.ps1` covers
+them on Windows.
 
 ```bash
 # 0. Clone and enter the repo
@@ -136,7 +157,7 @@ uv tool install .
 
 # 2. Install the privileged local daemon (needs root/administrator)
 sudo wisp daemon install      # Linux
-./setup.ps1                   # Windows (self-elevates to administrator)
+.\scripts\install.ps1        # Windows (self-elevates only daemon setup)
 ```
 
 Then log out and back in (or `newgrp wisp`) so your `wisp` group membership
@@ -205,7 +226,7 @@ Full documentation lives in [`docs/`](https://github.com/dosquisd/wisp-vpn/tree/
 | | |
 | --- | --- |
 | [Architecture](https://github.com/dosquisd/wisp-vpn/tree/main/docs/architecture.md) | High-level design, module map, runtime data flow |
-| [Installation](https://github.com/dosquisd/wisp-vpn/tree/main/docs/installation.md) | System requirements, `install.sh` / `setup.ps1`, daemon |
+| [Installation](https://github.com/dosquisd/wisp-vpn/tree/main/docs/installation.md) | System requirements, `install.sh` / `install.ps1` / `uninstall.ps1`, daemon |
 | [Usage](https://github.com/dosquisd/wisp-vpn/tree/main/docs/usage.md) | Full CLI and TUI reference |
 | [Configuration](https://github.com/dosquisd/wisp-vpn/tree/main/docs/configuration.md) | `wisp.toml`, `WispConfig`, per-provider settings |
 | [Deployment flow](https://github.com/dosquisd/wisp-vpn/tree/main/docs/deployment-flow.md) | Step-by-step deploy and destroy |

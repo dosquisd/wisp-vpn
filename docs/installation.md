@@ -46,6 +46,46 @@ and the Wisp-owned data directories; tools the installer itself installed
 are removed after asking, and anything marked pre-existing in the manifest
 is left untouched.
 
+## Quick install (Windows)
+
+Run PowerShell as a regular user. The script is self-contained and does not
+require a repository checkout:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+irm https://raw.githubusercontent.com/dosquisd/wisp-vpn/HEAD/scripts/install.ps1 | iex
+```
+
+The installer installs uv, the `wisp-vpn` CLI, WireGuard, Pulumi (unless
+skipped), the `wisp` local group, and the native `WispService` service. It
+installs the CLI per-user and elevates only the daemon setup. A local
+installation can be run with `.\scripts\install.ps1`; it is safe to run again.
+
+To skip Pulumi or preview the plan:
+
+```powershell
+& ([scriptblock]::Create((irm `
+    https://raw.githubusercontent.com/dosquisd/wisp-vpn/HEAD/scripts/install.ps1))) `
+    -SkipPulumi
+& ([scriptblock]::Create((irm `
+    https://raw.githubusercontent.com/dosquisd/wisp-vpn/HEAD/scripts/install.ps1))) `
+    -DryRun
+```
+
+To uninstall Wisp completely:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\uninstall.ps1
+```
+
+The uninstaller invokes `wisp daemon uninstall`, removes the Wisp CLI, service,
+group, machine-wide and user data, and dependencies recorded as installed by
+Wisp. Pre-existing dependencies are preserved. Use `-DryRun` to preview the
+actions or `-Yes` to skip dependency confirmation prompts. Destroy any live
+session before uninstalling: uninstalling the client does not destroy cloud
+resources, and leftover resources may continue billing.
+
 ## Requirements
 
 - Linux host for the client (macOS support is planned; the daemon uses systemd
@@ -55,10 +95,11 @@ is left untouched.
 - **Python 3.12+** (see `.python-version` and `requires-python` in
   `pyproject.toml`) — `uv` installs it for you automatically.
 - **WireGuard tools** (`wg`, `wg-quick`) on the client — installed by
-  `scripts/install.sh` (Linux) or `setup.ps1` (Windows), or manually with your
+  `scripts/install.sh` (Linux) or `scripts/install.ps1` (Windows), or manually with your
   distro's package manager.
 - **Pulumi CLI** — installed by `scripts/install.sh` (Linux, unless
-  `--skip-pulumi` is passed) or `setup.ps1` (Windows).
+  `--skip-pulumi` is passed) or `scripts/install.ps1` (Windows, unless
+  `-SkipPulumi` is passed).
 - **Cloud credentials** available in the environment (for example via the AWS
   CLI, `~/.aws/credentials`, or `~/.oci/config`), with permissions to manage
   instances, security rules, and key pairs, **or** configured in `wisp.toml`.
@@ -112,20 +153,17 @@ What it does, in order:
 
 ### Windows
 
-The installation is performed with `setup.ps1`, which installs WireGuard Windows
-exe, Pulumi via `winget`, and a native Windows service for the daemon.
+The installation is performed with `scripts/install.ps1`, which is
+self-contained and installs WireGuard Windows exe, Pulumi via `winget`, and a
+native Windows service for the daemon:
 
-The `setup.ps1` script performs the following steps:
-
-1. Requires administrator privileges.
-2. Installs `uv` if not already present.
-3. Installs Pulumi via `winget`.
-4. Installs WireGuard Windows exe.
+1. Installs `uv` if not already present.
+2. Installs the `wisp-vpn` CLI from PyPI.
+3. Installs Pulumi via `winget` unless `-SkipPulumi` is passed.
+4. Installs the WireGuard Windows executable.
 5. Creates the `wisp` local group and adds the current user to it.
-6. Copies the source code and Python dependencies to the installation directory.
-7. Installs the Python virtual environment and Wisp into it.
-8. Installs the Wisp Windows service.
-9. Starts the Wisp service.
+6. Installs the Wisp Windows service from the uv-managed environment.
+7. Starts the Wisp service and records an install manifest.
 
 The daemon supports both systemd socket activation (Linux) and Windows Named
 Pipes (`WindowsNamedPipeTransport`) for communication with the CLI/TUI.
@@ -178,10 +216,9 @@ git pull
 uv tool install --editable . --force   # refresh the tool's isolated venv
 ```
 
-`setup.ps1` (Windows) is idempotent — re-run it after pulling if the daemon
-units changed (the script stops and uninstalls the existing service before
-reinstalling). On Linux, re-run `sudo wisp daemon install` to refresh the
-units and the daemon's runtime venv.
+`scripts/install.ps1` (Windows) is idempotent — re-run it to refresh the CLI
+and service. On Linux, re-run `sudo wisp daemon install` to refresh the units
+and the daemon's runtime venv.
 
 ## Uninstall
 
@@ -203,7 +240,5 @@ rm -rf ~/.config/wisp ~/.local/share/wisp ~/.local/state/wisp
 
 ```powershell
 # Windows
-Stop-Service WispService
-uv tool uninstall wisp
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\wisp"
+.\scripts\uninstall.ps1
 ```
