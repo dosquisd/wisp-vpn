@@ -28,6 +28,7 @@ This module is imported lazily by ``wisp.main``: importing anything from the
 would flip the CLI logger to the daemon's stderr-only sink for every command.
 """
 
+import filecmp
 import os
 import shutil
 import subprocess
@@ -345,12 +346,67 @@ def _prepare_windows_service_runtime() -> bool:
         _print_stderr(f"Could not find pywin32 runtime directory: {dll_dir}")
         return False
 
+    runtime_dlls = list(dll_dir.glob("*.dll"))
+    runtime_dlls.extend(Path(sys.base_prefix).glob("python*.dll"))
+
     try:
-        for dll in dll_dir.glob("*.dll"):
-            shutil.copy2(dll, venv_dir / dll.name)
+        for dll in runtime_dlls:
+            destination = venv_dir / dll.name
+            if destination.is_file() and filecmp.cmp(
+                dll, destination, shallow=False
+            ):
+                continue
+            try:
+                shutil.copy2(dll, destination)
+            except OSError as exc:
+                raise OSError(f"{dll.name}: {exc}") from exc
     except OSError as exc:
         _print_stderr(f"Could not prepare the pywin32 runtime: {exc}")
         return False
+    return True
+
+
+def _ensure_windows_group() -> bool:
+    """Ensure the local Wisp group exists and contains the current user.
+
+    Returns:
+        bool: True when the group is ready, otherwise False.
+    """
+    lookup = _run(["net", "localgroup", WISP_GROUP])
+    if lookup.returncode != 0:
+        created = _run(["net", "localgroup", WISP_GROUP, "/add"])
+        if created.returncode != 0:
+            _print_stderr(
+                f"Could not create group '{WISP_GROUP}': "
+                f"{created.stderr.strip() or 'unknown error'}"
+            )
+            return False
+        print(f"Created group '{WISP_GROUP}'.")
+
+    current_user = _run(["whoami"])
+    user = current_user.stdout.strip()
+    if current_user.returncode != 0 or not user:
+        _print_stderr(
+            "Could not determine the current Windows user for group setup."
+        )
+        return False
+
+    members = _run(["net", "localgroup", WISP_GROUP])
+    if user.lower() not in members.stdout.lower():
+        added = _run(
+            ["net", "localgroup", WISP_GROUP, user, "/add"],
+            ignore_failure=True,
+        )
+        if added.returncode != 0:
+            output = f"{added.stdout}\n{added.stderr}"
+            if added.returncode == 2 and "1378" in output:
+                return True
+            _print_stderr(
+                f"Could not add '{user}' to group '{WISP_GROUP}': "
+                f"{added.stderr.strip() or 'unknown error'}"
+            )
+            return False
+        print(f"User '{user}' added to group '{WISP_GROUP}'.")
     return True
 
 
@@ -629,11 +685,15 @@ def _install_windows() -> int:
     missing_tools = _wireguard_missing_windows()
     if missing_tools:
         _wireguard_warning(missing_tools)
+    if not _ensure_windows_group():
+        return 1
     if not _prepare_windows_service_runtime():
         return 1
 
+    service_command = [sys.executable, "-m", "wisp.daemon.windows_service"]
+    _run([*service_command, "remove"], ignore_failure=True)
     install_result = _run(
-        [sys.executable, "-m", "wisp.daemon.windows_service", "install"]
+        [*service_command, "install"]
     )
     if install_result.returncode != 0:
         _print_stderr(
@@ -644,9 +704,7 @@ def _install_windows() -> int:
         return 1
     update_result = _run(
         [
-            sys.executable,
-            "-m",
-            "wisp.daemon.windows_service",
+            *service_command,
             "--startup",
             "auto",
             "update",

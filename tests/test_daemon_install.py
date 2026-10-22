@@ -681,11 +681,21 @@ def test_install_windows_runs_pywin32_service_commands(
     )
     monkeypatch.setattr(daemon_install, "_is_windows_admin", lambda: True)
     monkeypatch.setattr(daemon_install, "_wireguard_missing_windows", lambda: [])
+    monkeypatch.setattr(daemon_install, "_ensure_windows_group", lambda: True)
+    monkeypatch.setattr(
+        daemon_install, "_prepare_windows_service_runtime", lambda: True
+    )
 
     exit_code = install_daemon()
 
     assert exit_code == 0
     assert runner.commands() == [
+        [
+            sys.executable,
+            "-m",
+            "wisp.daemon.windows_service",
+            "remove",
+        ],
         [sys.executable, "-m", "wisp.daemon.windows_service", "install"],
         [
             sys.executable,
@@ -696,6 +706,70 @@ def test_install_windows_runs_pywin32_service_commands(
             "update",
         ],
     ]
+
+
+def test_ensure_windows_group_accepts_existing_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def run(
+        cmd: list[str], *, ignore_failure: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        if cmd == ["whoami"]:
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="DESKTOP\\juand\n", stderr=""
+            )
+        if cmd == ["net", "localgroup", "wisp"]:
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="Alias name     wisp\nMembers\n", stderr=""
+            )
+        if cmd == ["net", "localgroup", "wisp", "DESKTOP\\juand", "/add"]:
+            return subprocess.CompletedProcess(
+                cmd, 2, stdout="", stderr="Error de sistema 1378.\n"
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(daemon_install, "_run", run)
+
+    assert daemon_install._ensure_windows_group() is True
+
+
+def test_prepare_windows_service_runtime_skips_identical_locked_dlls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    venv_dir = tmp_path / "venv"
+    dll_dir = venv_dir / "Lib" / "site-packages" / "pywin32_system32"
+    dll_dir.mkdir(parents=True)
+    source = dll_dir / "pywintypes.dll"
+    destination = venv_dir / source.name
+    source.write_bytes(b"runtime")
+    destination.write_bytes(b"runtime")
+    monkeypatch.setattr(
+        daemon_install.sys,
+        "executable",
+        str(venv_dir / "Scripts" / "python.exe"),
+    )
+
+    assert daemon_install._prepare_windows_service_runtime() is True
+
+
+def test_prepare_windows_service_runtime_copies_python_runtime_dll(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    venv_dir = tmp_path / "venv"
+    dll_dir = venv_dir / "Lib" / "site-packages" / "pywin32_system32"
+    dll_dir.mkdir(parents=True)
+    base_prefix = tmp_path / "python"
+    base_prefix.mkdir()
+    (base_prefix / "python314.dll").write_bytes(b"python-runtime")
+    monkeypatch.setattr(
+        daemon_install.sys,
+        "executable",
+        str(venv_dir / "Scripts" / "python.exe"),
+    )
+    monkeypatch.setattr(daemon_install.sys, "base_prefix", str(base_prefix))
+
+    assert daemon_install._prepare_windows_service_runtime() is True
+    assert (venv_dir / "python314.dll").read_bytes() == b"python-runtime"
 
 
 def test_install_windows_surfaces_admin_failure(
@@ -717,6 +791,10 @@ def test_install_windows_surfaces_admin_failure(
     )
     monkeypatch.setattr(daemon_install, "_is_windows_admin", lambda: True)
     monkeypatch.setattr(daemon_install, "_wireguard_missing_windows", lambda: [])
+    monkeypatch.setattr(daemon_install, "_ensure_windows_group", lambda: True)
+    monkeypatch.setattr(
+        daemon_install, "_prepare_windows_service_runtime", lambda: True
+    )
 
     exit_code = install_daemon()
 
@@ -725,7 +803,7 @@ def test_install_windows_surfaces_admin_failure(
     assert "Administrator" in captured.err
     assert "Access is denied" in captured.err
     # The update step never ran after the failed install.
-    assert len(runner.commands()) == 1
+    assert len(runner.commands()) == 2
 
 
 def test_uninstall_windows_runs_pywin32_remove(
