@@ -2,7 +2,6 @@
 **/__pycache__/
 .venv
 .ruff_cache
-odd
 
 # Wisp configuration file
 wisp.toml
@@ -18,3 +17,7 @@ build
 !.gitignore
 !.gitkeep
 !.github/
+
+# Local AI runtime state
+.atl/
+odd/
