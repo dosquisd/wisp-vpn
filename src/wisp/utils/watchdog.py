@@ -65,7 +65,7 @@ def _wisp_destroy_command(provider: str, region: str) -> list[str]:
     # No console script on PATH: re-enter through the current interpreter and
     # seed sys.argv so argparse sees the same subcommand invocation.
     bootstrap = (
-        f"import sys; sys.argv = ['wisp', 'destroy', {provider!r}, {region!r}]; "
+        f"import sys; sys.argv = ['wisp', 'destroy', {provider!r}, '-r', {region!r}]; "
         "from wisp.main import main; main()"
     )
     return [sys.executable, "-c", bootstrap]
