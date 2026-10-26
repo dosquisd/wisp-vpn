@@ -246,7 +246,11 @@ def create_ec2_instance(
         tags=DEFAULT_TAG,
     )
 
-    # Create the EC2 instance with the specified parameters
+    # Create the EC2 instance with the specified parameters.
+    # `instance_initiated_shutdown_behavior="terminate"` is what turns the
+    # in-VM watchdog's `poweroff` into a real teardown: AWS terminates the
+    # instance (and deletes its root volume) instead of merely stopping it,
+    # so an abandoned session cannot keep billing after the guest halts.
     instance = aws.ec2.Instance(
         custom_resource_name,
         instance_type=instance_type,
@@ -255,6 +259,7 @@ def create_ec2_instance(
         region=region,
         vpc_security_group_ids=[security_group.id],
         key_name=key_pair.key_name,
+        instance_initiated_shutdown_behavior="terminate",
     )
 
     pulumi.export("instance_id", instance.id)
