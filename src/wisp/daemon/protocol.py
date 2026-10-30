@@ -48,10 +48,15 @@ class Response:
     Attributes:
         ok (bool): Whether the operation succeeded.
         message (str): Human-readable detail or command output.
+        handshake_age_seconds (int | None): Age in seconds of the newest
+            WireGuard handshake, or ``None`` when the local interface is down,
+            has no peers, or the daemon cannot tell. The TUI uses this to
+            detect that the remote end is gone.
     """
 
     ok: bool
     message: str = ""
+    handshake_age_seconds: int | None = None
 
     def encode(self) -> bytes:
         """Serialize to newline-terminated JSON bytes for the socket."""
