@@ -17,7 +17,15 @@ service install:
   `/usr/local/lib/wisp/venv` (base interpreter picked from a candidate
   cascade — `python3.14`, `python3.13`, `python3.12`, `python3` — where the
   first candidate that survives *create venv → `pip install wisp-vpn` →
-  `import wisp.daemon.server`* wins) and only then touches systemd. The units
+  `import wisp.daemon.server`* wins) and only then touches systemd. What gets
+  installed is not always the PyPI release: `_daemon_install_target()` reads
+  the running CLI's PEP 610 `direct_url.json`, and when the CLI is an
+  editable or local install the daemon is built from **that checkout** (staged
+  into a temp directory, so a `sudo` build never leaves root-owned `build/` or
+  `*.egg-info` in the developer's repo). Without this, a developer's CLI and
+  the privileged daemon silently diverge: the CLI runs the working tree while
+  the daemon keeps executing the last published release — new daemon code
+  never runs, and the symptom shows up far from the cause. The units
   ship as package data (`wisp/data/wisp.socket` verbatim,
   `wisp/data/wisp.service.tpl` with an `{python_executable}` placeholder) and
   are rendered with that venv's interpreter. The reason for the dedicated
@@ -49,8 +57,10 @@ Wire protocol shared by the daemon and its local client:
 - `ActionEnum(StrEnum)`: `CONNECT`, `DISCONNECT`, `STATUS`.
 - `Request` dataclass: `action: ActionEnum`, `config_content: str | None`
   (only for `connect`). `encode()`/`decode()` use newline-terminated JSON.
-- `Response` dataclass: `ok: bool`, `message: str`, with matching
-  `encode()`/`decode()`.
+- `Response` dataclass: `ok: bool`, `message: str`,
+  `handshake_age_seconds: int | None` (defaulted, so older clients and daemons
+  stay compatible), with matching `encode()`/`decode()`. The age field is what
+  lets the tunnel view tell "local interface down" apart from "remote end gone".
 
 ## `daemon/transport.py`
 
@@ -76,35 +86,54 @@ Transport implementations selected by `get_transport()`:
 Platform-specific privileged operations, selected by `get_adapter()`:
 
 - `BaseAdapter(ABC)` — abstract `connect(config_content)`, `disconnect()`,
-  `status()`, plus a `WG_CONF_PATH: Path` attribute and a `_run(cmd)` helper.
+  `status()`, plus a `WG_CONF_PATH: Path` attribute, a `_run(cmd)` helper, and
+  `latest_handshake_epoch() -> int | None` (defaults to `None`).
+- `_parse_latest_handshakes(output: str) -> int | None` — parses `wg show <iface> latest-handshakes`
+  output into the maximum epoch timestamp across peers, `0` if peers exist but have
+  never handshook, or `None` if unparseable/empty.
 - `LinuxAdapter` — `WG_CONF_PATH = /etc/wireguard/wg0.conf`. `connect` writes
   the config (`0600`) and runs `wg-quick up wg0`; `disconnect` runs
-  `wg-quick down wg0`; `status` returns `wg show wg0` output.
+  `wg-quick down wg0`; `status` returns `wg show wg0` output;
+  `latest_handshake_epoch()` queries `wg show wg0 latest-handshakes`.
 - `WindowsAdapter` — `WG_CONF_PATH = /ProgramData/wisp/wireguard/wg0.conf`.
   Derives the tunnel name from the config stem and the tunnel service name
   (`WireGuardTunnel$<name>`). `connect` removes any leftover tunnel from a
-  previous session, writes the config (secured via `secure_file`/icacls), and
-  runs `wireguard /installtunnelservice`; `disconnect` uses
-  `wireguard /uninstalltunnelservice`.
+  previous session, writes the config (secured via `secure_file`/icacls),
+  runs `wireguard /installtunnelservice`, and then configures manual start:
+  `sc.exe config WireGuardTunnel$<name> start= demand`. WireGuard for Windows
+  defaults to `auto` start; setting `demand` ensures a workstation reboot
+  does not resurrect a dead tunnel. `disconnect` uses
+  `wireguard /uninstalltunnelservice`; `latest_handshake_epoch()` queries
+  `wg show <tunnel_name> latest-handshakes`.
 - `MacOSAdapter` — **not implemented yet**; all operations raise
   `NotImplementedError`.
 
 ## `daemon/server.py`
 
-Async request handling:
+Constants and async request handling:
 
+- `STALE_TUNNEL_SECONDS = 180` — maximum allowable handshake age during startup
+  staleness detection.
+- `reset_stale_tunnel(adapter, now=None) -> bool` — startup hygiene function.
+  The daemon runs as root/SYSTEM and cannot inspect the user's session marker,
+  so WireGuard handshake recency is used as the cross-user signal. If the
+  interface is up but has never completed a handshake (`handshake == 0`), or if
+  the latest handshake is older than 180s, `adapter.disconnect()` is called to
+  tear down the leftover tunnel and prevent routing black holes. Healthy live
+  tunnels (kept fresh via `PersistentKeepalive = 25`) are left undisturbed.
 - `handle_connect(config_content, adapter)` — writes the WireGuard config via
   the adapter (`0600`/icacls) and brings the tunnel up. Returns
   `Response(ok=True, "connected")` or the command's stderr on
   `CalledProcessError`.
 - `handle_disconnect(adapter)` — brings the tunnel down.
-- `handle_status(adapter)` — returns the tunnel status output.
+- `handle_status(adapter)` — returns the tunnel status output, plus
+  `handshake_age_seconds` computed from `adapter.latest_handshake_epoch()`
+  (`None` when the interface is down or has no peer).
 - `handle_client(reader, writer)` — reads one `Request`, dispatches by action
   with the platform adapter, writes one `Response`. Unknown actions and
   exceptions yield `ok=False`.
-- `main(transport=None)` — starts the transport server (a
-  `UnixSocketTransport` by default, or the injected transport — the Windows
-  Service injects a `WindowsNamedPipeTransport`) and serves forever.
+- `main(transport=None)` — starts the transport server. On boot, calls
+  `await reset_stale_tunnel(transport.adapter)` before serving connections.
 
 Run standalone with:
 

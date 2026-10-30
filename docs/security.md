@@ -75,17 +75,49 @@ to the platform adapter for `connect` / `disconnect` / `status`.
   as-is to SSH into your server — Wisp never generates, stores, or deletes
   it. Password authentication is not supported.
 
-## The TTL watchdog
+## The session watchdogs
 
-The optional watchdog (`[general].max_session_ttl_minutes`, default `60`)
-schedules an OS-level one-shot (`systemd-run --user` on Linux, `schtasks` on
-Windows) that runs `wisp destroy <provider> <region>` when the TTL expires.
-The command runs under your user account with your cloud credentials and the
-same permission model as a manual destroy — it is exactly `wisp destroy`, not
-a privileged background service. Scheduling is idempotent and manual teardown
-cancels it. Its purpose is to bound the blast radius of a forgotten session:
-without it, a crashed TUI can leave a publicly reachable VM billing
-indefinitely.
+Wisp uses two autonomous watchdog layers to bound the financial risk of abandoned
+infrastructure:
+
+1. **In-VM watchdog (remote root)**:
+   Runs as root inside the remote server managed by systemd (`wisp-watchdog@<nic>.timer`
+   and `/usr/local/bin/wisp-watchdog`). It acts as a dead man's switch that evaluates
+   two conditions:
+   - **Hard TTL**: Evaluates `DEADLINE_EPOCH` computed at deploy time against the remote
+     clock; when exceeded, teardown triggers immediately.
+   - **Idle handshake check**: Checks `wg show <nic> latest-handshakes`. If no handshake
+     has occurred for 900 seconds (15 minutes), teardown triggers.
+   - **VPS safety boundary**: On cloud VMs (`mode=cloud`), the watchdog executes
+     `systemctl poweroff`. In AWS (`instance_initiated_shutdown_behavior="terminate"`)
+     and GCP (`instance_termination_action="DELETE"`), this halts and terminates the VM.
+     On a **Custom VPS (`mode=vps`)**, the watchdog **never powers off or halts the server**.
+     It only tears down Wisp's specific interface (`wg-quick down`), its configuration
+     files, and its own systemd units, leaving all unrelated services and host operations
+     untouched.
+
+2. **Local watchdog (local user)**:
+   The optional local watchdog (`[general].max_session_ttl_minutes`, default `60`)
+   schedules an OS-level one-shot (`systemd-run --user` on Linux, `schtasks` on
+   Windows) that runs `wisp destroy <provider> <region>` when the TTL expires.
+   The command runs under your local user account with your cloud credentials and the
+   same permission model as a manual destroy — it is exactly `wisp destroy`, not
+   a privileged background service. Scheduling is idempotent and manual teardown
+   cancels it.
+
+## Local network fail-safes and panic disconnect
+
+- **Panic disconnect without cloud credentials**: `wisp disconnect` is a local-only
+  command that commands the local daemon to bring down the WireGuard interface
+  immediately. It requires no cloud credentials, internet access, or Pulumi state,
+  ensuring you can restore standard network routing if a remote server disappears.
+- **Daemon startup sanitization**: On launch, the daemon inspects the interface
+  via `reset_stale_tunnel`. If an interface is up with no handshake recorded or its
+  most recent handshake is older than 180 seconds, it is automatically disconnected
+  before serving clients, preventing a stale tunnel from capturing default routes.
+- **Windows demand start**: On Windows, tunnel services are installed with
+  `sc.exe config ... start= demand`, preventing Windows from resurrecting a dead
+  tunnel upon reboot.
 
 ## Firewall exposure
 

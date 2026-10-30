@@ -13,10 +13,11 @@ the user's server and runs the same installer (step 6), using a
 `wisp-<hex>` server-side interface name instead of `wg0`.
 
 **Before provisioning starts**, the Progress screen writes the active-session
-marker and arms the `SessionGuard`: a TUI or console death mid-deploy leaves
+marker (recording provider, region, PID, start time, `ttl_minutes`, and
+`expires_at`) and arms the `SessionGuard`: a TUI or console death mid-deploy leaves
 the marker behind and lets the signal handlers cancel the in-flight update
 and destroy partial resources. If `[general].max_session_ttl_minutes > 0`,
-arming the guard also schedules the OS-level TTL watchdog
+arming the guard also schedules the OS-level local TTL watchdog
 (`utils/watchdog.py`). The guard is re-armed unchanged on success and on
 completed failure.
 
@@ -55,7 +56,7 @@ completed failure.
    (`wireguard/remote_server.py`) runs:
    - Establishes SSH connection to the VM using the private key (Paramiko,
      supporting Ed25519, ECDSA, RSA key formats).
-   - Uploads `scripts/wireguard-server-install.sh` via SFTP to
+   - Uploads `src/wisp/data/wireguard-server-install.sh` via SFTP to
      `/tmp/wireguard-install.sh` (this script **is not optional** — it is the
      WireGuard server installer, based on `angristan/wireguard-install`).
    - Executes the script remotely with configuration passed as environment variables:
@@ -67,13 +68,28 @@ completed failure.
      firewall, routing, and generates the client configuration
    - Downloads the generated client config (`wg0-client-*.conf`) via SFTP to
      `wireguard-confs/wg0-client.conf`
+   - Ensures `PersistentKeepalive = 25` is present in the downloaded client
+     config (`ensure_persistent_keepalive`). Because the in-VM watchdog infers
+     abandonment from handshake recency, an idle-but-healthy tunnel without
+     keepalives would emit no packets and risk being killed as abandoned.
+   - Arms the **in-VM session watchdog** (`install_session_watchdog`):
+     queries the server timestamp via `date +%s` to compute `DEADLINE_EPOCH`
+     against the remote clock (eliminating client/server clock skew), uploads
+     the packaged `wisp-watchdog.sh` to `/usr/local/bin/wisp-watchdog` (mode `0755`),
+     writes `/etc/wisp/watchdog-<nic>.conf` (mode `0600`), installs the
+     templated systemd units `/etc/systemd/system/wisp-watchdog@.service` and
+     `wisp-watchdog@.timer` (configured to tick every 60s), and enables
+     `wisp-watchdog@<nic>.timer`.
 
 7. **Connect the local client.** `connect_wireguard_client(conf_text)`
    (`wireguard/local_client.py`) sends a `CONNECT` request with the config
    content to the daemon over `/run/wisp.sock` (Linux) or
    `\\.\pipe\wisp` (Windows). The daemon (`daemon/server.py`) writes the
    WireGuard config (`0600` / icacls) and runs `wg-quick up wg0` (Linux)
-   or the native Windows equivalent via its adapter.
+   or the native Windows equivalent via its adapter. On Windows,
+   `WindowsAdapter.connect` explicitly sets the tunnel service start type to
+   demand (`sc.exe config WireGuardTunnel$wg0 start= demand`) so a system reboot
+   cannot resurrect a dead tunnel.
 
 8. **Return.** A `DeployVMResult` with `instance_id`, `public_ip`, `private_ip`,
    and `wireguard_port`.
@@ -86,10 +102,17 @@ Entry: `Provider.delete_vm(region, on_progress=None)`.
    `DISCONNECT` request; the daemon runs `wg-quick down wg0` (Linux) or
    the native Windows equivalent.
 
-2. **Cancel any in-flight update, then destroy infrastructure.** Selects the
-   stack, calls `stack.cancel()` (a no-op when nothing is in flight — this is
+2. **Cancel any in-flight update, refresh, then destroy infrastructure.** Selects
+   the stack, calls `stack.cancel()` (a no-op when nothing is in flight — this is
    what lets orphan cleanup tear down a stack whose deploy was interrupted),
-   then `stack.destroy()`. Errors are logged and cause an early return of `0`.
+   then `stack.refresh()`, then `stack.destroy()`. The refresh reconciles state
+   with the cloud first, which matters when the in-VM watchdog already powered
+   the VM off out-of-band: destroying against stale state fails per resource.
+   The refresh is best effort (expired credentials or a provider outage must not
+   block the destroy). Errors are logged and cause an early return of `0`.
+   Concurrency needs no Wisp lock: Pulumi's backend already locks the stack and a
+   second concurrent update raises `ConcurrentUpdateError`, which
+   `describe_pulumi_error()` turns into a readable message.
 
 3. **Clean up local artifacts** (if present):
    - `keys/wireguard-key.pem`
@@ -114,12 +137,17 @@ shows real state instead of one frozen message.
 
 **VPS destroy (`VPSProvider.delete_vm`) additionally tears the tunnel down on
 the server.** `remove_wisp_server_configs()`
-(`wireguard/remote_server.py`) SSHes in and, for every
-`/etc/wireguard/wisp-*.conf`: runs `wg-quick down <nic>` (the config's
+(`wireguard/remote_server.py`) SSHes in and disarms the in-VM watchdog first:
+stops and disables `wisp-watchdog@<nic>.timer` and removes `/etc/wisp/watchdog-<nic>.conf`.
+Then, for every `/etc/wireguard/wisp-*.conf`: runs `wg-quick down <nic>` (the config's
 `PostDown` rules remove the iptables/firewall rules the installer added),
-runs `systemctl disable --now wg-quick@<nic>`, and deletes the config file.
-Packages are kept — the server may have been using WireGuard before Wisp —
-and any non-wisp config (e.g. the user's own `wg0`) is never touched.
+runs `systemctl disable --now wg-quick@<nic>`, and deletes the config file and
+client configs. If `/etc/wireguard/params` is owned by the Wisp interface, it is
+removed. Only once no remaining `/etc/wisp/watchdog-*.conf` files exist are the
+shared script (`/usr/local/bin/wisp-watchdog`), unit templates (`wisp-watchdog@.service`
+and `wisp-watchdog@.timer`), and `/etc/wisp` directory removed. Packages are kept — the
+server may have been using WireGuard before Wisp — and any non-wisp config (e.g. the
+user's own `wg0`) is never touched.
 
 ## Session lifecycle
 
@@ -140,7 +168,9 @@ Every trigger funnels into that same guard, and the first one to fire wins:
 | `SIGINT` | Explicit `kill -INT` or shell job control -> guard |
 | Interpreter exit | `atexit` hook (all platforms) |
 | Previous run died | `find_orphaned_session` warns on next startup |
-| TTL expired | OS-level watchdog (`utils/watchdog.py`) runs `wisp destroy <provider> <region>` — this one works even if Wisp is gone |
+| Local TTL expired | OS-level watchdog (`utils/watchdog.py`) runs `wisp destroy <provider> <region>` locally — works even if Wisp exits |
+| In-VM hard TTL reached | Autonomous remote timer (`wisp-watchdog@<nic>.timer`) -> `DEADLINE_EPOCH` reached -> `poweroff` (Cloud) or interface cleanup (VPS) |
+| In-VM idle timeout | Autonomous remote timer -> no WireGuard handshake for 900s -> `poweroff` (Cloud) or interface cleanup (VPS) |
 
 `ShutdownScreen` owns the actual teardown so the blocking Pulumi destroy shows
 progress instead of freezing the interface. `SessionGuard.shutdown()` is
@@ -177,18 +207,39 @@ keybindings and `atexit`. `SIGKILL` cannot be caught on any platform by design;
 the marker file is the mitigation, since it outlives a hard kill and lets the
 next run report the orphaned resources.
 
-## The TTL watchdog
+## The session watchdogs (In-VM and Local)
 
-The marker-based mitigations above only trigger on the *next* launch — if
-nobody reopens Wisp, a forgotten VM keeps billing. When
-`[general].max_session_ttl_minutes > 0` (default `60`), deploying schedules an
-OS-level one-shot that belongs to the OS, not to Wisp (`systemd-run --user`
-transient unit on Linux, `schtasks` on Windows) which runs
-`wisp destroy <provider> <region>` when the TTL expires. Manual teardown
-cancels it (best effort); if Wisp dies, the timer fires alone. Scheduling is
-idempotent (cancel-first), so re-arming the session guard reschedules the
-same target cleanly. The deploy screen can toggle it per deployment and the
-CLI overrides it with `--ttl`; `0` keeps it off.
+Wisp implements two autonomous watchdog layers to ensure abandoned infrastructure
+is reliably torn down even if the client disappears:
+
+1. **In-VM watchdog (primary)**:
+   Installed inside the remote server at deployment time (`/usr/local/bin/wisp-watchdog`
+   with configuration `/etc/wisp/watchdog-<nic>.conf` and systemd timer `wisp-watchdog@<nic>.timer`).
+   Because it executes independently on the server, it survives the client PC being turned off,
+   losing power, closing its lid, or crashing.
+   - **Hard TTL**: Evaluates `DEADLINE_EPOCH` computed at install time from the server's clock
+     (`date +%s + ttl * 60`). When `now >= DEADLINE_EPOCH`, teardown triggers immediately.
+   - **Idle detection**: Checks `wg show <nic> latest-handshakes`. If no handshake has occurred
+     for `IDLE_SECONDS` (default `900`, 15 minutes), teardown triggers. If no peer has ever
+     handshook, the elapsed time is measured against `SESSION_STARTED_EPOCH`.
+   - **Cattle vs pets action**: In cloud mode (`MODE="cloud"`), triggers `systemctl poweroff`.
+     On AWS and GCP, instances terminate and clean up their disks. On Custom VPS (`MODE="vps"`),
+     it never powers off the host; it executes `wg-quick down`, disables the service, removes
+     Wisp configuration files and params, and deletes its own units.
+
+2. **Local OS-level watchdog (secondary)**:
+   When `[general].max_session_ttl_minutes > 0` (default `60`), deploying schedules an
+   OS-level one-shot on the user's workstation (`systemd-run --user` transient unit on Linux,
+   `schtasks` on Windows) which runs `wisp destroy <provider> <region>` when the TTL expires.
+   Manual teardown cancels it. The deploy screen can toggle it per deployment and the CLI
+   overrides it with `--ttl`; `0` keeps it off.
+
+### Session marker and resumability
+
+The active-session marker (`active-session.json`) records `ttl_minutes` and the calculated
+`expires_at` epoch alongside the provider, region, and PID. Through `ActiveSession.is_resumable()`,
+Wisp can distinguish an expired session from a session that is still valid within its TTL window
+following an accidental client reboot or temporary disconnect.
 
 ## Notes on the remote installer
 

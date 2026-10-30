@@ -37,10 +37,11 @@ src/wisp/
 ├── main.py                 # Entry point; argparse CLI + TUI dispatch; wisp console script
 ├── schemas.py              # Shared TypedDicts (InventoryContext: SSH/WireGuard deploy context)
 ├── cli/                    # Textual TUI
-│   ├── app.py              # WispApp (styles, screen registration)
+│   ├── app.py              # WispApp (styles, screen registration, startup adoption)
 │   ├── state.py            # AppState (in-memory session state, TOML-derived defaults)
+│   ├── session_boot.py     # arm_session_guard: one teardown for deploys and adoption
 │   ├── __main__.py         # python -m wisp.cli launcher
-│   └── screens/            # MainMenu, Config, Deploy, Progress screens
+│   └── screens/            # MainMenu, Config, Deploy, Progress, Tunnel, SessionEnded
 ├── config/
 │   ├── settings.py         # TOML loading (user+project merged), WispConfig, per-provider defaults
 │   ├── credentials.py      # Per-provider credential resolution (AWS/OCI/GCP/VPS) + validation
@@ -63,14 +64,14 @@ src/wisp/
 │   ├── protocol.py         # Request/Response wire format (newline-delimited JSON)
 │   └── windows_service.py  # Windows Service wrapper (pywin32)
 └── utils/                  # logger, platform detection, RNG, public IP, Pulumi helpers,
-                            # session TTL watchdog (systemd/schtasks)
+                            # teardown notice, session TTL watchdog (systemd/schtasks)
 ```
 
 Supporting non-Python assets at the repo root:
 
 ```text
 scripts/    install.sh                   # Self-contained bootstrap installer (uv + wisp-vpn + WireGuard
-                                         # + optional Pulumi + `sudo wisp daemon install` + install manifest)
+                                         # + optional Pulumi + `daemon install` under sudo + install manifest)
             uninstall.sh                 # Self-contained manifest-driven uninstaller
             wireguard-client-install.sh  # Client installer (self-contained: carries its own shell helpers)
 setup.ps1                                # Windows installer: native service, WireGuard exe, Pulumi via winget
@@ -132,6 +133,28 @@ resolved per user via `platformdirs` (env overrides `WISP_DATA_DIR`,
   `delete_vm` returns (and by CLI `wisp destroy` when the destroy matches the
   marker) — never leave it behind or the next startup "cleans up" an orphan
   whose resources no longer exist.
+- **Concurrency is Pulumi's job, not ours.** The stack backend locks a stack for
+  the duration of an update, so a second concurrent `up`/`refresh`/`destroy`
+  raises `pulumi.automation.errors.ConcurrentUpdateError`. Do NOT add a
+  Wisp-owned lock: it would duplicate that guarantee and add a stale-lock
+  failure mode. Do handle the error clearly via
+  `describe_pulumi_error()` (`src/wisp/utils/pulumi.py`), which also unwraps the
+  real diagnostics from `exc.command_result` instead of showing `code: 1`.
+- **Startup adoption** (`WispApp._maybe_adopt_live_session`): a marker whose
+  owner process is dead *and* whose local interface has a handshake younger than
+  `STALE_TUNNEL_SECONDS` is adopted into the tunnel view. Never hijack a marker
+  whose owner is alive, and never rewrite the marker or reschedule the OS
+  one-shot during adoption (that would silently extend the session).
+  `cli/session_boot.arm_session_guard` is the single construction of the
+  teardown closure for both fresh deploys and adoption.
+- **Remote death is detected, never assumed** (`TunnelScreen.health_state`):
+  `local_down` says nothing about the remote end (`wisp disconnect` is local);
+  only a handshake older than `STALE_TUNNEL_SECONDS`, or no handshake at all
+  after a 180 s grace window, moves the TUI to `SessionEndedScreen`, which
+  disarms the guard first. A destroy announces itself through
+  `teardown-notice.json` (`utils/operations.py`) so a TUI can show
+  `ExternalTeardownScreen` instead of a stale live view; that notice is
+  observability only, never mutual exclusion.
 - Never capture a screen (`self`) inside a teardown closure: the screen that
   started it is swapped out long before it runs — report progress through
   `app.thread_safe_call` instead.
@@ -167,6 +190,22 @@ resolved per user via `platformdirs` (env overrides `WISP_DATA_DIR`,
 - **Daemon transport**: Unix socket `/run/wisp.sock` (Linux, systemd socket
   activation via fd 3) or Named Pipe `\\.\pipe\wisp` (Windows). Selected by
   `daemon.transport.get_transport()`.
+- **The daemon is a separate venv, and mirrors a local checkout**:
+  `wisp daemon install` builds `/usr/local/lib/wisp/venv` (root-owned, so a
+  root service never executes user-mutable code) from either the PyPI release
+  or — when the running CLI's PEP 610 `direct_url.json` points at a local
+  directory — a **staged copy of that checkout** (`_daemon_install_target` /
+  `_staged_install_target` in `daemon/install.py`; staging keeps the `sudo`
+  build from dropping root-owned `build/` and `*.egg-info` into the repo).
+  Consequence for development: daemon-side edits do not reach the running
+  service until `daemon install` runs again under `sudo` (or a manual
+  `uv pip install --force-reinstall --no-deps` into that venv) **and**
+  `sudo systemctl restart wisp.service`. Note that a bare `sudo wisp ...`
+  fails when sudo's `secure_path` omits `~/.local/bin`; the CLI prints the
+  absolute-path form, and `utils/privileges.root_invocation()` builds that
+  hint for the daemon messages and the TUI. A stale daemon looks like a client
+  bug — e.g. it answers `status` without `handshake_age_seconds`, so startup
+  adoption silently never fires.
 - **File permissions**: `secure_file()` → `0600` (Linux) or `icacls`
   with well-known SIDs `*S-1-5-18:F` / `*S-1-5-32-544:F` (Windows — SIDs
   because account names are localized on non-English Windows).
@@ -196,13 +235,43 @@ resolved per user via `platformdirs` (env overrides `WISP_DATA_DIR`,
   from `exc.command_result.stderr/stdout` (str(exc) alone is "code: 1") and
   the progress screen shows a scrollable error box with a Destroy Resources
   button — partial resources are billable.
-- **Session TTL watchdog** (`src/wisp/utils/watchdog.py`, optional): when
-  `[general].max_session_ttl_minutes > 0` (default 60), deploying schedules
-  an OS-level one-shot (`systemd-run --user` on Linux, `schtasks` on
-  Windows) that runs `wisp destroy <provider> <region>` when the TTL
-  expires — it survives TUI/process death. Scheduling is idempotent
-  (cancel-first); teardown and `wisp destroy` cancel it. The deploy screen
-  can toggle it per run (`--ttl` on the CLI).
+- **Session watchdog (two layers)**:
+  - **In-VM layer (primary)**: deployed at `/usr/local/bin/wisp-watchdog` with
+    `/etc/wisp/watchdog-<nic>.conf` and templated units `wisp-watchdog@.service`
+    / `wisp-watchdog@.timer` (ticks every 60s). It survives local PC power-loss,
+    sleep, or TUI death. Triggers on hard TTL (`DEADLINE_EPOCH` computed from
+    server clock at install time; 0 disables) or idle timeout (no WireGuard
+    handshake for `DEFAULT_WATCHDOG_IDLE_SECONDS = 900` / 15 min; counts from
+    deploy time if no peer ever handshook).
+  - **Cattle vs pets rule**: on Cloud VMs (`mode=cloud`), watchdog executes
+    `systemctl poweroff` (AWS sets `instance_initiated_shutdown_behavior="terminate"`
+    to terminate and delete root volume; GCP uses `instance_termination_action="DELETE"`;
+    OCI stops instance). On Custom VPS (`mode=vps`), the server is NEVER
+    powered off; watchdog strictly tears down Wisp's own interface (`wg-quick down`),
+    configs, params (if owned), and units.
+  - **Local layer (secondary)** (`src/wisp/utils/watchdog.py`, optional): when
+    `[general].max_session_ttl_minutes > 0` (default 60), deploying schedules
+    an OS-level one-shot (`systemd-run --user` on Linux, `schtasks` on
+    Windows) that runs `wisp destroy <provider> <region>` on the local machine.
+    Teardown and `wisp destroy` cancel it. The deploy screen toggles it per run
+    (`--ttl` on the CLI).
+  - **Keepalive**: `PersistentKeepalive = 25` is automatically added to client
+    configs so an idle-but-healthy tunnel emits handshakes and avoids false
+    abandonment triggers.
+  - **Disarm on manual teardown**: `wisp destroy` / TUI teardown disables
+    `wisp-watchdog@<nic>.timer`, removes `/etc/wisp/watchdog-<nic>.conf`, and
+    only cleans up the shared script and unit templates when no other session
+    configs remain.
+  - **Client network fail-safes**: on Windows, `sc.exe config WireGuardTunnel$wg0 start= demand`
+    prevents bringing up a dead tunnel after reboot; the daemon runs
+    `reset_stale_tunnel` on startup, dropping interfaces with no handshake or
+    stale handshakes older than 180s before serving.
+  - **Local CLI commands (no cloud credentials)**: `wisp disconnect` is a local
+    panic switch bringing down the client interface without touching cloud VMs
+    or Pulumi; `wisp connect` re-attaches using the stored client config.
+  - **Active session marker**: `active-session.json` records `ttl_minutes` and
+    computed `expires_at`. `ActiveSession.is_expired()` and `is_resumable()`
+    permit cleanly recognizing an active, unexpired session across restarts.
 - **`wisp gc`** inspects leftover `wisp-stack-*` Pulumi stacks via exported
   state (no program run), counts real resources, and with `--destroy` tears
   them down. `--refresh` reconciles state against the cloud first, so

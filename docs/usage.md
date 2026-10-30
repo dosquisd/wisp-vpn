@@ -9,6 +9,8 @@ subcommands. Both are dispatched from `wisp.main:main` (`parse_args` + `main`).
 wisp            # no subcommand → launches the TUI
 wisp deploy     # CLI: deploy a VM
 wisp destroy    # CLI: destroy VMs
+wisp connect    # CLI: reconnect local client to an active tunnel
+wisp disconnect # CLI: panic switch to disconnect local client immediately
 wisp regions    # CLI: list available regions
 wisp daemon     # CLI: install/uninstall the privileged local daemon
 ```
@@ -36,8 +38,9 @@ entirely and configures WireGuard on the server you point it at.
   the provider configuration in `wisp.toml` (`[aws].region`, `[oci].region`,
   or `[gcp].region`). There is no cross-provider default region. Ignored for
   `vps`.
-- `--ttl MINUTES` — session TTL watchdog: schedules an OS-level timer that
-  runs `wisp destroy` after this many minutes even if Wisp exits (default:
+- `--ttl MINUTES` — session TTL watchdog: sets the hard session cap armed on
+  both the remote in-VM watchdog (`DEADLINE_EPOCH`) and the local OS-level
+  scheduler that runs `wisp destroy` after this many minutes (default:
   `[general].max_session_ttl_minutes`; `0` disables it).
 - `--wireguard-port PORT` — UDP port for the tunnel (default:
   `[general].wireguard_port`; `0` picks a random port).
@@ -149,8 +152,40 @@ lifecycle (remove vs keep) belongs to the `scripts/uninstall.sh` bootstrap,
 which records in the install manifest whether the group was created by Wisp.
 
 ```bash
-sudo wisp daemon install
-sudo wisp daemon uninstall
+# Both need root; use the absolute script path because sudo's secure_path
+# usually omits ~/.local/bin (see troubleshooting.md).
+sudo env PYTHONDONTWRITEBYTECODE=1 "$(command -v wisp)" daemon install
+sudo env PYTHONDONTWRITEBYTECODE=1 "$(command -v wisp)" daemon uninstall
+```
+
+### `wisp disconnect`
+
+Panic switch to immediately disconnect the local WireGuard client interface via
+the privileged local daemon. This is a **purely local operation**:
+
+- Does NOT make any cloud API calls.
+- Does NOT touch Pulumi state or cloud resources.
+- Does NOT require cloud provider credentials.
+
+Use this command if an interrupted session or dead VM left the local interface
+up, capturing the default route and leaving the machine without internet.
+
+```bash
+wisp disconnect
+# → WireGuard client disconnected.
+```
+
+### `wisp connect`
+
+Re-attaches the local WireGuard client using the locally stored client
+configuration file (`wireguard-confs/wg0-client.conf`). Like `disconnect`, it is
+purely local and requires no cloud provider credentials. Useful for recovering
+connectivity to an already running session after a transient client reboot or
+sleep cycle within the session's active TTL window.
+
+```bash
+wisp connect
+# → WireGuard client connected.
 ```
 
 ## CLI vs TUI behaviour
@@ -179,6 +214,9 @@ and screen registration live in `cli/app.py`; per-session state lives in
 | Configuration | `screens/config.py` | Edit per-session `WispConfig` (in memory) |
 | Deploy | `screens/deploy.py` | Pick provider + region, review summary, start deploy |
 | Progress | `screens/progress.py` | Live deploy/destroy progress; shows results; destroy button |
+| Tunnel | `screens/tunnel.py` | Live session view; health from handshake age; leaves the view when the session ends |
+| Session ended | `screens/session_ended.py` | Remote end is gone; offer state reconciliation or return to the menu |
+| External teardown | `screens/session_ended.py` | Another Wisp process is destroying the session; returns automatically |
 
 ### Navigation and key bindings
 
@@ -201,7 +239,7 @@ Edits an in-memory `WispConfig` for the session (persisted to the active
 - `wireguard_port` (`0` = random in `49152–65535`, otherwise `0–65535`)
 - `wireguard_interface` (non-empty)
 - Primary / secondary DNS (both non-empty)
-- `max_session_ttl_minutes` (default TTL for the OS-level watchdog; `0` = off)
+- `max_session_ttl_minutes` (default session TTL for both in-VM and local watchdogs; `0` = off)
 - Restrict access to your current public IP only (toggle → `/32` firewall rule)
 
 Validation errors are shown inline. Both *Save* and *Reset* ask for
@@ -228,8 +266,8 @@ full values" toggle only reveals them.
   SSH private key path, and WireGuard port (`0` = random). The form is the
   source of truth for the deployment; the TOML `[vps]` section only pre-fills
   it.
-- Session TTL watchdog row (switch + minutes) — arms the OS-level timer for
-  this deployment.
+- Session TTL watchdog row (switch + minutes) — arms both the in-VM watchdog
+  (`DEADLINE_EPOCH`) and the local OS-level timer for this deployment.
 - A summary reflects the current config; "Start Deployment" pushes the
   Progress screen which runs the deployment in a worker thread.
 
@@ -260,3 +298,22 @@ irreversible, a *Confirmation* modal asks first unless
 `[general].confirm_destroy` is `false` — `q` and `Ctrl+C` ask too when a
 tunnel is live, while on every other screen they quit straight away. The
 dialog's "Don't ask again" checkbox turns that off and persists it.
+
+The view also watches the session itself, so it never shows a tunnel that is no
+longer there:
+
+- **Recovered sessions**: if a previous Wisp run left a live tunnel behind (the
+  local interface is up and a WireGuard handshake arrived within the last three
+  minutes), the TUI opens the tunnel view on startup and says the session was
+  recovered. The original start time and expiry are preserved.
+- **Remote end gone**: when no handshake has arrived for more than three minutes
+  the view switches to a *Session ended* screen. That is what an in-VM watchdog
+  termination looks like from the client side. From there you can reconcile the
+  leftover state (the destroy refreshes before destroying, so it is safe even
+  when nothing is left) or return to the menu.
+- **Another process destroying the session**: a scheduled `wisp destroy` announces
+  itself, and the view switches to a *Destroying resources* screen that returns
+  to the menu automatically when the destroy finishes.
+- **Local interface down** (`wisp disconnect`) is reported as-is and does not
+  trigger either screen: a downed local interface says nothing about the remote
+  end.
