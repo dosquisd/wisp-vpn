@@ -3,7 +3,11 @@
 Provides the ``wisp daemon install`` / ``wisp daemon uninstall`` commands:
 
 - **Linux**: builds a **root-owned venv** at ``/usr/local/lib/wisp/venv``,
-  installs ``wisp-vpn`` into it, and validates that the venv's interpreter
+  installs ``wisp-vpn`` into it from the PyPI release — or, when the invoking
+  CLI is itself a local/editable install, from a staged copy of that checkout,
+  so the privileged daemon mirrors the code the user is actually running
+  instead of silently staying behind the last published release (see
+  :func:`_daemon_install_target`) — and validates that the venv's interpreter
   actually imports ``wisp.daemon.server`` *before* touching systemd. The base
   interpreter is picked from a candidate cascade (``python3.14``, then
   ``python3.13``, ``python3.12``, then ``python3``): the first candidate that
@@ -29,14 +33,21 @@ would flip the CLI logger to the daemon's stderr-only sink for every command.
 """
 
 import filecmp
+import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
+from importlib import metadata
 from importlib.resources import files
 from pathlib import Path
+from typing import Iterator
+from urllib.parse import unquote, urlparse
 
 from wisp.utils import PlatformEnum, logger
+from wisp.utils.privileges import root_invocation
 
 #: Target directory for the systemd units (module-level constant so tests can
 #: redirect it; override by monkeypatching, not by parameter).
@@ -51,8 +62,32 @@ LINUX_UNIT_DIR = Path("/etc/systemd/system")
 #: monkeypatching, not by parameter.
 LINUX_INSTALL_DIR = Path("/usr/local/lib/wisp")
 
-#: PyPI distribution installed into the daemon venv.
+#: Distribution installed into the daemon venv when the invoking CLI came from
+#: a package index. A local install is mirrored instead; see
+#: :func:`_daemon_install_target`.
 WISP_PACKAGE = "wisp-vpn"
+
+#: Directory names that can never contribute to the wheel. Skipped when a local
+#: checkout is staged so the copy stays small (and never drags a whole ``.git``
+#: or a multi-gigabyte ``.venv`` into a temp dir).
+_STAGING_IGNORE = shutil.ignore_patterns(
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "*.pyc",
+    "build",
+    "dist",
+    "*.egg-info",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".pytest_cache",
+    ".tox",
+    "node_modules",
+    "graphify-out",
+)
 
 #: Probe that tells whether this machine runs systemd (systemd creates it on
 #: every booted system; monkeypatchable in tests).
@@ -234,15 +269,140 @@ def _discard_daemon_venv(venv_dir: Path) -> None:
     shutil.rmtree(venv_dir, ignore_errors=True)
 
 
+def _local_source_from_direct_url(direct_url_path: Path) -> Path | None:
+    """Read a ``direct_url.json`` and return the local project it points at.
+
+    PEP 610 records how a distribution was installed. A package coming from an
+    index has no ``direct_url.json`` at all; an editable or local install has
+    one with a ``file://`` URL pointing at the project directory.
+
+    POSIX only: the URL path is percent-decoded, which is exactly what
+    ``urllib.request.url2pathname`` does there. The caller is the Linux daemon
+    setup path, so no Windows drive-letter handling is needed (and importing
+    ``urllib.request`` here would pull in ``ssl`` for a single string).
+
+    Args:
+        direct_url_path (Path): Path of the distribution's ``direct_url.json``.
+
+    Returns:
+        Path | None: The existing project directory the distribution was
+        installed from, or ``None`` when the file is missing, malformed, or
+        does not point at a local directory that still exists.
+    """
+    try:
+        document = json.loads(direct_url_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.debug("Could not read %s: %s", direct_url_path, exc)
+        return None
+
+    url = document.get("url") if isinstance(document, dict) else None
+    if not isinstance(url, str):
+        return None
+
+    parsed = urlparse(url)
+    if parsed.scheme != "file" or parsed.netloc not in ("", "localhost"):
+        return None
+
+    source = Path(unquote(parsed.path))
+    if not source.is_dir():
+        return None
+    return source
+
+
+def _daemon_install_target() -> str:
+    """Decide what to install into the daemon venv: the release, or this checkout.
+
+    The daemon venv is built from the distribution name, which is right for
+    anyone who installed Wisp from the package index. It is wrong for a
+    developer running an editable install: the CLI on ``PATH`` points at their
+    working tree while the privileged daemon keeps executing the last
+    published release, so new daemon-side code silently never runs. That
+    mismatch is invisible — the CLI looks updated, the daemon answers with an
+    older protocol — and the symptom surfaces far away from the cause.
+
+    When PEP 610 metadata says the running package came from a local
+    directory, the daemon mirrors that directory instead. The copy is
+    root-owned and non-editable (see :func:`_staged_install_target`), so the
+    "a root service must not execute user-mutable code" invariant holds.
+
+    Returns:
+        str: :data:`WISP_PACKAGE` for an index install, or the path of the
+        local checkout the running CLI came from.
+    """
+    try:
+        distribution = metadata.distribution(WISP_PACKAGE)
+    except metadata.PackageNotFoundError:
+        logger.debug("%s metadata not found; installing the release", WISP_PACKAGE)
+        return WISP_PACKAGE
+
+    for entry in distribution.files or []:
+        if entry.name != "direct_url.json":
+            continue
+        source = _local_source_from_direct_url(distribution.locate_file(entry))
+        if source is not None:
+            logger.info(
+                "The running %s was installed from the local checkout at %s; "
+                "the daemon venv will be built from it instead of the published "
+                "release.",
+                WISP_PACKAGE,
+                source,
+            )
+            return str(source)
+        break
+    return WISP_PACKAGE
+
+
+class _StagingError(RuntimeError):
+    """A local checkout could not be staged for the daemon venv build."""
+
+
+@contextmanager
+def _staged_install_target(target: str) -> Iterator[str]:
+    """Yield the argument pip should install, staging a local checkout first.
+
+    A local directory cannot be handed to pip as-is: the build backend writes
+    ``build/`` and ``*.egg-info`` into the source tree, and ``wisp daemon
+    install`` runs under ``sudo``, so those artifacts would land root-owned
+    inside the developer's repository and break their next ``uv sync``. A
+    staged copy keeps the build disposable and the checkout untouched.
+
+    Args:
+        target (str): :data:`WISP_PACKAGE` or a local project directory.
+
+    Yields:
+        str: The package name unchanged, or the staged copy of the project.
+    """
+    source = Path(target)
+    if target == WISP_PACKAGE or not source.is_dir():
+        yield target
+        return
+
+    with tempfile.TemporaryDirectory(prefix="wisp-daemon-build-") as staging_root:
+        staged = Path(staging_root) / source.name
+        try:
+            shutil.copytree(source, staged, ignore=_STAGING_IGNORE)
+        except OSError as exc:
+            # Falling back to the release would install code that does not
+            # match the CLI, which is the exact bug this function exists to
+            # prevent. Fail loudly instead.
+            raise _StagingError(
+                f"Could not stage the local checkout at {source} for the daemon "
+                f"venv: {exc}"
+            ) from exc
+        logger.debug("Staged %s at %s for the daemon venv", source, staged)
+        yield str(staged)
+
+
 def _build_daemon_venv(venv_dir: Path) -> str | None:
     """Build the root-owned daemon venv from the first workable interpreter.
 
     Iterates the candidates from :func:`_venv_base_candidates` in order; for
-    each one it creates the venv, installs ``wisp-vpn`` into it, and
-    validates that the venv's interpreter imports ``wisp.daemon.server``.
-    The first candidate that survives all three steps wins. A candidate that
-    fails at any step has its half-built venv removed (best effort), the
-    reason is logged at DEBUG, and the next candidate is tried.
+    each one it creates the venv, installs the package resolved by
+    :func:`_daemon_install_target` into it, and validates that the venv's
+    interpreter imports ``wisp.daemon.server``. The first candidate that
+    survives all three steps wins. A candidate that fails at any step has its
+    half-built venv removed (best effort), the reason is logged at DEBUG, and
+    the next candidate is tried.
 
     Args:
         venv_dir (Path): Target directory of the daemon venv.
@@ -254,38 +414,41 @@ def _build_daemon_venv(venv_dir: Path) -> str | None:
     """
     venv_python = venv_dir / "bin" / "python"
     venv_pip = venv_dir / "bin" / "pip"
-    for candidate in _venv_base_candidates():
-        logger.debug("Trying base interpreter %s for the daemon venv", candidate)
-        created = _run([candidate, "-m", "venv", str(venv_dir)])
-        if created.returncode != 0:
-            logger.debug(
-                "venv creation with %s failed: %s",
-                candidate,
-                created.stderr.strip() or "unknown error",
+    with _staged_install_target(_daemon_install_target()) as install_target:
+        for candidate in _venv_base_candidates():
+            logger.debug("Trying base interpreter %s for the daemon venv", candidate)
+            created = _run([candidate, "-m", "venv", str(venv_dir)])
+            if created.returncode != 0:
+                logger.debug(
+                    "venv creation with %s failed: %s",
+                    candidate,
+                    created.stderr.strip() or "unknown error",
+                )
+                _discard_daemon_venv(venv_dir)
+                continue
+            installed = _run(
+                [str(venv_pip), "install", "--upgrade", "pip", install_target]
             )
-            _discard_daemon_venv(venv_dir)
-            continue
-        installed = _run([str(venv_pip), "install", "--upgrade", "pip", WISP_PACKAGE])
-        if installed.returncode != 0:
-            logger.debug(
-                "pip install into the venv from %s failed: %s",
-                candidate,
-                installed.stderr.strip() or "unknown error",
-            )
-            _discard_daemon_venv(venv_dir)
-            continue
-        # Fail fast: the venv must be able to import the server before
-        # anything systemd-related runs and before any unit file is written.
-        validated = _run([str(venv_python), "-c", "import wisp.daemon.server"])
-        if validated.returncode != 0:
-            logger.debug(
-                "the venv from %s cannot import the server: %s",
-                candidate,
-                validated.stderr.strip() or "unknown error",
-            )
-            _discard_daemon_venv(venv_dir)
-            continue
-        return str(venv_python)
+            if installed.returncode != 0:
+                logger.debug(
+                    "pip install into the venv from %s failed: %s",
+                    candidate,
+                    installed.stderr.strip() or "unknown error",
+                )
+                _discard_daemon_venv(venv_dir)
+                continue
+            # Fail fast: the venv must be able to import the server before
+            # anything systemd-related runs and before any unit file is written.
+            validated = _run([str(venv_python), "-c", "import wisp.daemon.server"])
+            if validated.returncode != 0:
+                logger.debug(
+                    "the venv from %s cannot import the server: %s",
+                    candidate,
+                    validated.stderr.strip() or "unknown error",
+                )
+                _discard_daemon_venv(venv_dir)
+                continue
+            return str(venv_python)
     return None
 
 
@@ -477,7 +640,8 @@ def _install_linux() -> int:
     """
     if os.geteuid() != 0:
         _print_stderr(
-            "wisp daemon install must run as root (try: sudo wisp daemon install)."
+            "wisp daemon install must run as root "
+            f"(try: {root_invocation('daemon install')})."
         )
         return 1
 
@@ -503,7 +667,11 @@ def _install_linux() -> int:
     except OSError as exc:
         _print_stderr(f"Could not create {venv_dir.parent}: {exc}")
         return 1
-    venv_python = _build_daemon_venv(venv_dir)
+    try:
+        venv_python = _build_daemon_venv(venv_dir)
+    except _StagingError as exc:
+        _print_stderr(str(exc))
+        return 1
     if venv_python is None:
         _print_stderr(
             "No suitable Python interpreter found to build the daemon venv; "
@@ -614,7 +782,8 @@ def _uninstall_linux() -> int:
     """
     if os.geteuid() != 0:
         _print_stderr(
-            "wisp daemon uninstall must run as root (try: sudo wisp daemon uninstall)."
+            "wisp daemon uninstall must run as root "
+            f"(try: {root_invocation('daemon uninstall')})."
         )
         return 1
 

@@ -351,13 +351,21 @@ install_daemon() {
         wisp_bin="$(command -v wisp)"
     fi
     if $DRY_RUN; then
-        plan "sudo ${wisp_bin:-wisp} daemon install"
+        plan "sudo env PYTHONDONTWRITEBYTECODE=1 ${wisp_bin:-wisp} daemon install"
         return 0
     fi
     # Absolute path on purpose: sudo's secure_path does not include
     # ~/.local/bin, so plain `sudo wisp` would not resolve.
-    info "Running: sudo ${wisp_bin} daemon install"
-    if ! sudo "$wisp_bin" daemon install; then
+    #
+    # PYTHONDONTWRITEBYTECODE=1 on purpose: the console script imports wisp
+    # (plus pulumi and the google-cloud stack) from the *user's* uv tool venv
+    # before handing off to the root-owned daemon venv. Run as root, that
+    # import writes root-owned __pycache__ entries into the user's tool venv,
+    # which then makes `uv tool install --force` and `uv tool uninstall` fail
+    # with EACCES. `sudo env` is required because sudo's env_reset drops a
+    # plain `VAR=value` prefix.
+    info "Running: sudo env PYTHONDONTWRITEBYTECODE=1 ${wisp_bin} daemon install"
+    if ! sudo env PYTHONDONTWRITEBYTECODE=1 "$wisp_bin" daemon install; then
         fail "'wisp daemon install' failed (see its output above). Nothing privileged was re-implemented here."
     fi
 }

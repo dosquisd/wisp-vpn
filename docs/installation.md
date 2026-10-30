@@ -17,11 +17,12 @@ needed). In order, it:
 4. Installs the WireGuard tools via the distro package manager.
 5. Installs the Pulumi CLI per-user under `~/.pulumi` unless `--skip-pulumi`
    is passed.
-6. Delegates the privileged part to `sudo wisp daemon install` — systemd
-   units, the `wisp` group, and the re-login hint all come from the CLI
-   itself. The daemon runtime lives in a root-owned venv at
-   `/usr/local/lib/wisp/venv` (a root service must not execute user-mutable
-   code); it is removed again by `sudo wisp daemon uninstall`.
+6. Delegates the privileged part to the CLI's `daemon install` command, run
+   under `sudo` with the console script's absolute path (`sudo` drops
+   `~/.local/bin` from `PATH`) — systemd units, the `wisp` group, and the
+   re-login hint all come from the CLI itself. The daemon runtime lives in a
+   root-owned venv at `/usr/local/lib/wisp/venv` (a root service must not
+   execute user-mutable code); `daemon uninstall` removes it again.
 7. Writes an `install-manifest.json` under the Wisp data dir, recording
    which tools were already on the machine (`pre_existing`) and which the
    script installed (`installed_by_wisp`), so the uninstaller knows what to
@@ -129,11 +130,18 @@ uv tool install --editable .
 
 The client-side daemon must run as root so it can bring the local WireGuard
 interface up and down. `wisp daemon install` installs it. **Run it as root**
-(it checks and exits otherwise):
+(it checks and exits otherwise), passing the console script by absolute path:
 
 ```bash
-sudo wisp daemon install
+sudo env PYTHONDONTWRITEBYTECODE=1 "$(command -v wisp)" daemon install
 ```
+
+The absolute path is not a preference. `sudo` resets `PATH` to its
+`secure_path`, which normally omits `~/.local/bin` — where `uv tool install`
+puts `wisp` — so a bare `sudo wisp daemon install` fails with
+`sudo: wisp: command not found` even though `wisp` works without `sudo`. See
+[troubleshooting.md](troubleshooting.md#sudo-wisp-daemon-install-says-command-not-found)
+for the full explanation.
 
 What it does, in order:
 
@@ -143,7 +151,11 @@ What it does, in order:
 4. Builds a root-owned venv at `/usr/local/lib/wisp/venv` from the first
    suitable interpreter and installs `wisp-vpn` into it — this is what the
    systemd unit executes, because a root service must not run user-mutable
-   code.
+   code. The install source follows the CLI: a normal PyPI installation gets
+   the PyPI release, while a CLI installed from a local checkout (`uv tool
+   install --editable .`) makes the daemon mirror that checkout, so the two
+   never drift apart. A local source is staged into a temporary directory
+   first, so the build leaves no root-owned artifacts in your repository.
 5. Writes `wisp.socket` and `wisp.service`, reloads systemd, enables/starts
    the socket, and restarts the service.
 
@@ -217,8 +229,16 @@ uv tool install --editable . --force   # refresh the tool's isolated venv
 ```
 
 `scripts/install.ps1` (Windows) is idempotent — re-run it to refresh the CLI
-and service. On Linux, re-run `sudo wisp daemon install` to refresh the units
-and the daemon's runtime venv.
+and service. On Linux, re-run
+`sudo env PYTHONDONTWRITEBYTECODE=1 "$(command -v wisp)" daemon install` to
+refresh the units and the daemon's runtime venv.
+
+If you develop an editable install, the daemon mirrors your checkout: after
+changing daemon-side code (`src/wisp/daemon/**`, `src/wisp/wireguard/**`),
+re-run the same `daemon install` command and then `sudo systemctl restart
+wisp.service`. Editing files alone does not reload the running service, and an
+outdated daemon is easy to misread as a client bug — an old daemon answers
+`status` without fields the new client expects.
 
 ## Uninstall
 

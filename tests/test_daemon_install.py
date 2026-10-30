@@ -4,10 +4,13 @@ All subprocess calls are mocked at the ``wisp.daemon.install._run`` boundary:
 no real ``systemctl``, ``groupadd``, ``usermod``, ``getent``, or ``reg`` runs.
 """
 
+import json
 import subprocess
 import sys
+import types
 from importlib.resources import files
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -19,9 +22,13 @@ from wisp.daemon.install import (
     uninstall_daemon,
 )
 from wisp.main import CommandEnum, parse_args
-from wisp.utils import PlatformEnum
+from wisp.utils import PlatformEnum, privileges
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: The unpatchable resolver, captured before the autouse fixture below replaces
+#: it, so the resolution tests can exercise the real implementation.
+RESOLVE_INSTALL_TARGET = daemon_install._daemon_install_target
 
 
 class FakeRunner:
@@ -88,6 +95,22 @@ def as_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(daemon_install.os, "geteuid", lambda: 0)
 
 
+@pytest.fixture(autouse=True)
+def pinned_install_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the daemon venv to the package name for the install-flow tests.
+
+    The real resolver mirrors a local checkout, and ``uv run`` installs wisp
+    exactly that way, so without this every command assertion would depend on
+    how the test run itself installed the project. The resolver has its own
+    tests below, which bypass this fixture.
+    """
+    monkeypatch.setattr(
+        daemon_install,
+        "_daemon_install_target",
+        lambda: daemon_install.WISP_PACKAGE,
+    )
+
+
 @pytest.fixture
 def linux_env(
     runner: FakeRunner, as_root: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -121,6 +144,204 @@ def units_written(unit_dir: Path) -> bool:
     return (unit_dir / "wisp.socket").is_file() and (
         unit_dir / "wisp.service"
     ).is_file()
+
+
+# --- Daemon venv install target (PyPI release vs local checkout) -------------
+
+
+def _write_direct_url(path: Path, url: str, *, editable: bool = True) -> Path:
+    """Write a PEP 610 ``direct_url.json`` and return its path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = {"url": url}
+    if editable:
+        document["dir_info"] = {"editable": True}
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
+
+
+def test_local_source_from_direct_url_reads_editable_checkout(
+    tmp_path: Path,
+) -> None:
+    """An editable install records the checkout it came from."""
+    source = tmp_path / "wisp"
+    source.mkdir()
+    direct_url = _write_direct_url(
+        tmp_path / "dist-info" / "direct_url.json", f"file://{source}"
+    )
+
+    assert daemon_install._local_source_from_direct_url(direct_url) == source
+
+
+def test_local_source_from_direct_url_decodes_percent_escapes(
+    tmp_path: Path,
+) -> None:
+    """PEP 610 URLs are percent-encoded; the path must be decoded."""
+    source = tmp_path / "my project"
+    source.mkdir()
+    direct_url = _write_direct_url(
+        tmp_path / "dist-info" / "direct_url.json",
+        f"file://{quote(str(source))}",
+    )
+
+    assert daemon_install._local_source_from_direct_url(direct_url) == source
+
+
+def test_local_source_from_direct_url_rejects_non_file_urls(tmp_path: Path) -> None:
+    """A wheel or an index URL is not a checkout."""
+    direct_url = _write_direct_url(
+        tmp_path / "direct_url.json",
+        "https://files.pythonhosted.org/packages/wisp_vpn-0.1.3-py3-none-any.whl",
+        editable=False,
+    )
+
+    assert daemon_install._local_source_from_direct_url(direct_url) is None
+
+
+def test_local_source_from_direct_url_rejects_missing_directory(
+    tmp_path: Path,
+) -> None:
+    """A checkout that was moved or deleted must not be installed from."""
+    direct_url = _write_direct_url(
+        tmp_path / "direct_url.json", f"file://{tmp_path / 'gone'}"
+    )
+
+    assert daemon_install._local_source_from_direct_url(direct_url) is None
+
+
+def test_local_source_from_direct_url_rejects_malformed_file(tmp_path: Path) -> None:
+    """A half-written or corrupt metadata file degrades to "no source"."""
+    direct_url = tmp_path / "direct_url.json"
+    direct_url.write_text("{not json", encoding="utf-8")
+
+    assert daemon_install._local_source_from_direct_url(direct_url) is None
+    assert daemon_install._local_source_from_direct_url(tmp_path / "absent") is None
+
+
+def test_daemon_install_target_mirrors_local_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A local CLI makes the daemon install the same checkout."""
+    source = tmp_path / "wisp"
+    source.mkdir()
+    direct_url = _write_direct_url(tmp_path / "direct_url.json", f"file://{source}")
+
+    class _Distribution:
+        files = [types.SimpleNamespace(name="direct_url.json")]
+
+        @staticmethod
+        def locate_file(entry: object) -> Path:
+            return direct_url
+
+    monkeypatch.setattr(
+        daemon_install.metadata, "distribution", lambda name: _Distribution()
+    )
+
+    assert RESOLVE_INSTALL_TARGET() == str(source)
+
+
+def test_daemon_install_target_uses_release_without_direct_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An index install has no ``direct_url.json``; keep the published name."""
+
+    class _Distribution:
+        files = [types.SimpleNamespace(name="METADATA")]
+
+        @staticmethod
+        def locate_file(entry: object) -> Path:  # pragma: no cover - never used
+            raise AssertionError("no direct_url.json should be read")
+
+    monkeypatch.setattr(
+        daemon_install.metadata, "distribution", lambda name: _Distribution()
+    )
+
+    assert RESOLVE_INSTALL_TARGET() == daemon_install.WISP_PACKAGE
+
+
+def test_daemon_install_target_uses_release_without_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing distribution must not break the install."""
+
+    def _missing(name: str) -> None:
+        raise daemon_install.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(daemon_install.metadata, "distribution", _missing)
+
+    assert RESOLVE_INSTALL_TARGET() == daemon_install.WISP_PACKAGE
+
+
+def test_staged_install_target_copies_checkout_without_vcs_or_build_dirs(
+    tmp_path: Path,
+) -> None:
+    """Staging copies the sources and skips what the build cannot need."""
+    source = tmp_path / "wisp"
+    (source / "src" / "wisp").mkdir(parents=True)
+    (source / "src" / "wisp" / "__init__.py").write_text("", encoding="utf-8")
+    (source / "pyproject.toml").write_text("[build-system]\n", encoding="utf-8")
+    (source / ".git").mkdir()
+    (source / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (source / ".venv").mkdir()
+    (source / "build").mkdir()
+
+    with daemon_install._staged_install_target(str(source)) as staged:
+        staged_path = Path(staged)
+        assert staged_path != source
+        assert (staged_path / "pyproject.toml").is_file()
+        assert (staged_path / "src" / "wisp" / "__init__.py").is_file()
+        assert not (staged_path / ".git").exists()
+        assert not (staged_path / ".venv").exists()
+        assert not (staged_path / "build").exists()
+
+    assert not staged_path.exists()
+    assert (source / "pyproject.toml").is_file()
+
+
+def test_staged_install_target_passes_package_name_through() -> None:
+    """A PyPI target is handed to pip untouched, with no staging at all."""
+    with daemon_install._staged_install_target(daemon_install.WISP_PACKAGE) as target:
+        assert target == daemon_install.WISP_PACKAGE
+
+
+def test_install_linux_builds_daemon_venv_from_local_checkout(
+    linux_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``wisp daemon install`` builds from a staged copy, never from the repo.
+
+    Building in place under ``sudo`` would drop root-owned ``build/`` and
+    ``*.egg-info`` into the developer's checkout.
+    """
+    source = tmp_path / "checkout"
+    (source / "src" / "wisp").mkdir(parents=True)
+    (source / "pyproject.toml").write_text("[build-system]\n", encoding="utf-8")
+    monkeypatch.setattr(daemon_install, "_daemon_install_target", lambda: str(source))
+
+    seen_targets: list[str] = []
+
+    def fake_run(
+        cmd: list[str], *, ignore_failure: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        if cmd[1:3] == ["install", "--upgrade"]:
+            seen_targets.append(cmd[-1])
+            # The staged copy must exist while pip runs.
+            assert Path(cmd[-1]).is_dir()
+        if len(cmd) > 3 and cmd[1:3] == ["-m", "venv"]:
+            Path(cmd[3]).mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(daemon_install, "_run", fake_run)
+    monkeypatch.delenv("SUDO_USER", raising=False)
+
+    assert install_daemon() == 0
+    assert len(seen_targets) == 1
+    staged = Path(seen_targets[0])
+    assert staged != source
+    assert staged.name == source.name
+    assert not staged.exists()
+    assert not (source / "build").exists()
+    assert not list(source.glob("*.egg-info"))
 
 
 # --- Template rendering (package data) --------------------------------------
@@ -272,12 +493,17 @@ def test_install_linux_requires_root(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(daemon_install.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(
+        privileges.shutil, "which", lambda name: "/home/u/.local/bin/wisp"
+    )
 
     exit_code = install_daemon()
 
     assert exit_code == 1
     assert runner.commands() == []
-    assert "root" in capsys.readouterr().err
+    stderr = capsys.readouterr().err
+    assert "root" in stderr
+    assert 'sudo env PYTHONDONTWRITEBYTECODE=1 "/home/u/.local/bin/wisp"' in stderr
 
 
 def test_install_linux_fails_when_groupadd_fails(
@@ -660,14 +886,20 @@ def test_uninstall_linux_without_units_is_a_clean_noop(
 
 
 def test_uninstall_linux_requires_root(
-    runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+    runner: FakeRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(daemon_install.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(
+        privileges.shutil, "which", lambda name: "/home/u/.local/bin/wisp"
+    )
 
     exit_code = uninstall_daemon()
 
     assert exit_code == 1
     assert runner.commands() == []
+    assert "root" in capsys.readouterr().err
 
 
 # --- Windows branch (pywin32 service) ----------------------------------------
