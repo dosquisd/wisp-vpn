@@ -10,36 +10,10 @@ from wisp.cli.screens.base import WispScreen
 from wisp.cli.screens.modal import ConfirmDestroyScreen
 from wisp.cli.screens.shutdown import confirmed_destroy, request_shutdown
 from wisp.cli.screens.tunnel import TunnelScreen
+from wisp.cli.session_boot import arm_session_guard
 from wisp.providers import PROVIDERS_MAP, ProviderEnum
 from wisp.providers.base import DeployVMResult, get_provider_display_name
-from wisp.session import teardown_active_session, write_active_session
-from wisp.utils.watchdog import schedule_ttl_watchdog
-
-
-def _extract_error_details(exc: Exception) -> str:
-    """Pull a human-readable message out of a failed provision run.
-
-    Pulumi Automation errors wrap a ``command_result`` whose stderr carries
-    the real provider diagnostics; ``str(exc)`` alone is often just
-    ``"code: 1"``. The most informative lines are kept: every line that
-    mentions an error, or — when none do — the last few lines of output,
-    which is where Pulumi prints its failure summary.
-
-    Args:
-        exc (Exception): The raised deploy/destroy exception.
-
-    Returns:
-        str: Multi-line diagnostic text suitable for the error box.
-    """
-    command_result = getattr(exc, "command_result", None)
-    if command_result is not None:
-        text = f"{command_result.stderr or ''}\n{command_result.stdout or ''}"
-        lines = [line for line in text.splitlines() if line.strip()]
-        error_lines = [line for line in lines if "error" in line.lower()]
-        detail = "\n".join(error_lines[:10]) if error_lines else "\n".join(lines[-10:])
-        if detail.strip():
-            return detail
-    return str(exc)
+from wisp.utils.pulumi import describe_pulumi_error
 
 
 class ProgressScreen(WispScreen):
@@ -203,6 +177,12 @@ class ProgressScreen(WispScreen):
         state = self.app.state  # type: ignore[attr-defined]
         provider = self._get_provider()
 
+        # Providers read the session TTL from ``config`` to arm the in-VM
+        # watchdog, so the deploy screen's per-run override has to land there
+        # before provisioning starts. ``WispConfig`` is session settings and is
+        # never written back to the TOML, so this is not a persisted change.
+        state.config.max_session_ttl_minutes = state.effective_session_ttl()
+
         def on_progress(msg: str, progress: float | None) -> None:
             self.app.call_from_thread(self._handle_progress, msg, progress)
 
@@ -214,7 +194,7 @@ class ProgressScreen(WispScreen):
             )
             self.app.call_from_thread(self._handle_success, result)
         except Exception as exc:
-            self.app.call_from_thread(self._handle_error, _extract_error_details(exc))
+            self.app.call_from_thread(self._handle_error, describe_pulumi_error(exc))
 
     def _handle_progress(self, msg: str, progress: float | None) -> None:
         try:
@@ -277,18 +257,23 @@ class ProgressScreen(WispScreen):
         the tunnel and the cloud resources. The guard is idempotent: whichever
         trigger fires first performs the teardown and the rest are no-ops.
 
-        The teardown deliberately references only the app, never ``self``: by the
-        time it runs this screen has usually been swapped for the tunnel view, and
-        a closure over a discarded screen would fail to report progress.
+        The teardown itself lives in :func:`wisp.cli.session_boot.arm_session_guard`
+        so the deploy flow and startup adoption cannot build it differently. It
+        references only the app, never ``self``: by the time it runs this screen
+        has usually been swapped for the tunnel view, and a closure over a
+        discarded screen would fail to report progress.
         """
         state = self.app.state
-        app = self.app
         provider_name = state.provider_name
         region = state.selected_region
 
-        write_active_session(
-            provider_name,
-            region,
+        arm_session_guard(
+            self.app,
+            provider=provider_name,
+            region=region,
+            # The TTL the session actually runs under: the deploy screen's
+            # per-run toggle wins over the configured default (0 = off).
+            ttl_minutes=state.effective_session_ttl(),
             vps=(
                 {
                     "host": state.vps_credentials.host,
@@ -299,30 +284,9 @@ class ProgressScreen(WispScreen):
                 if provider_name == ProviderEnum.VPS.value
                 else None
             ),
+            write_marker=True,
+            schedule_watchdog=True,
         )
-
-        # Optional OS-level TTL watchdog: fires `wisp destroy` even if this
-        # process dies, so a forgotten session cannot bill forever. The TTL
-        # comes from the deploy screen's toggle; 0 keeps the watchdog off.
-        ttl_minutes = state.effective_session_ttl()
-        if ttl_minutes > 0:
-            schedule_ttl_watchdog(provider_name, region, ttl_minutes)
-
-        def teardown(reason: str) -> None:
-            """Release the session's resources.
-
-            Args:
-                reason (str): Why the session is shutting down.
-            """
-            report = app.thread_safe_call
-            report(f"Destroying tunnel ({reason})...")
-            teardown_active_session(
-                provider_name,
-                region,
-                on_progress=lambda msg, _p: report(msg),
-            )
-
-        state.session_guard.arm(teardown)
 
     def _handle_error(self, error_msg: str) -> None:
         self._deploying = False
