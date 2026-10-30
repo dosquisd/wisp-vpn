@@ -28,16 +28,22 @@ from wisp.config.settings import (
     load_wisp_config,
 )
 from wisp.providers import PROVIDERS_MAP, ProviderEnum
-from wisp.session import clear_active_session, read_active_session
+from wisp.session import (
+    clear_active_session,
+    read_active_session,
+    write_active_session,
+)
 from wisp.utils.logger import logger
+from wisp.utils.operations import begin_teardown, end_teardown
 from wisp.utils.pulumi import (
+    describe_pulumi_error,
     destroy_wisp_stack,
     list_wisp_stacks,
     refresh_wisp_stack,
     stack_resource_counts,
 )
 from wisp.utils.watchdog import cancel_ttl_watchdog, schedule_ttl_watchdog
-from wisp.wireguard import disconnect_wireguard_client
+from wisp.wireguard import connect_wireguard_client, disconnect_wireguard_client
 
 
 class CommandEnum(enum.StrEnum):
@@ -49,6 +55,8 @@ class CommandEnum(enum.StrEnum):
     REGIONS = "regions"
     GC = "gc"
     DAEMON = "daemon"
+    DISCONNECT = "disconnect"  # panic option: disconnect the local WireGuard client without destroying the remote VM
+    CONNECT = "connect"
 
 
 class RuntimeArgs(TypedDict):
@@ -259,6 +267,16 @@ def parse_args(argv: list[str] | None = None) -> RuntimeArgs:
         help="Remove the privileged local daemon",
     )
 
+    subparsers.add_parser(
+        "connect",
+        help="Connect the local WireGuard client to the remote VM",
+    )
+
+    subparsers.add_parser(
+        "disconnect",
+        help="Disconnect the local WireGuard client from the remote VM",
+    )
+
     args = parser.parse_args(argv).__dict__
 
     return RuntimeArgs(
@@ -342,6 +360,10 @@ def _run_gc(destroy: bool = False, refresh: bool = False) -> None:
         print("Run `wisp gc --destroy` to tear them down.")
         return
 
+    # No mutual-exclusion lock here: Pulumi's backend already locks a stack for
+    # the duration of an update, so a concurrent deploy or destroy fails with a
+    # clear ConcurrentUpdateError instead of corrupting state.
+    #
     # Disconnect the local WireGuard client before destroying any stacks, so the
     # daemon can remove the local artifacts (SSH key + client conf) without
     # leaving the client in a broken state. The daemon will also remove the
@@ -356,6 +378,7 @@ def _run_gc(destroy: bool = False, refresh: bool = False) -> None:
     destroyed_any = False
     for provider, (region, count) in leftover.items():
         print(f"\nDestroying {count} resource(s) from wisp-stack-{provider}...")
+        begin_teardown(provider, region)
         try:
             # Best-effort refresh first: destroying ghost resources (deleted
             # out-of-band) would otherwise fail per resource.
@@ -366,7 +389,12 @@ def _run_gc(destroy: bool = False, refresh: bool = False) -> None:
             destroyed_any = True
             print(f"wisp-stack-{provider}: deleted {deleted} resource(s)")
         except Exception as exc:
-            print(f"wisp-stack-{provider}: destroy failed: {exc}")
+            logger.debug(f"gc destroy failed for wisp-stack-{provider}", exc_info=True)
+            print(
+                f"wisp-stack-{provider}: destroy failed:\n{describe_pulumi_error(exc)}"
+            )
+        finally:
+            end_teardown()
 
     if destroyed_any:
         # The destroyed stacks' local WireGuard artifacts (SSH key + client
@@ -463,6 +491,39 @@ def main() -> None:
             sys.exit(install_daemon())
         sys.exit(uninstall_daemon())
 
+    if command == CommandEnum.CONNECT:
+        if not WIREGUARD_CLIENT_CONF_PATH.exists():
+            print(
+                f"WireGuard client config not found at {WIREGUARD_CLIENT_CONF_PATH}. "
+                "Please deploy a VM first.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        content = WIREGUARD_CLIENT_CONF_PATH.read_text()
+        connect_response = connect_wireguard_client(content)
+        if connect_response.ok:
+            print("WireGuard client connected successfully.")
+            sys.exit(0)
+        else:
+            print(
+                f"Failed to connect WireGuard client: {connect_response.message}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    if command == CommandEnum.DISCONNECT:
+        disconnect_response = disconnect_wireguard_client()
+        if disconnect_response.ok:
+            print("WireGuard client disconnected successfully.")
+            sys.exit(0)
+        else:
+            print(
+                f"Failed to disconnect WireGuard client: {disconnect_response.message}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     # It's not necessary to do this assertion, because the CLI will always provide a provider, but it's a good safety check
     assert provider_option is not None, (
         "Provider must be specified for deploy, destroy, or regions commands."
@@ -501,6 +562,17 @@ def main() -> None:
         if args["wireguard_port"] is not None:
             config.wireguard_port = max(0, int(args["wireguard_port"]))
 
+        # --ttl wins over the configured default (0 keeps the watchdog off).
+        # Providers read the session TTL from ``config`` to arm the in-VM
+        # watchdog, so resolve it before provisioning, not after.
+        ttl_minutes = (
+            args["ttl_minutes"]
+            if args["ttl_minutes"] is not None
+            else config.max_session_ttl_minutes
+        )
+        config.max_session_ttl_minutes = ttl_minutes
+
+        vps_payload: dict | None = None
         if provider_option == ProviderEnum.VPS:
             # CLI flags override the TOML [vps] section for this deployment.
             creds = resolve_vps_credentials()
@@ -513,62 +585,100 @@ def main() -> None:
             if args["ssh_key_path"]:
                 creds.ssh_key_path = args["ssh_key_path"]
             provider = PROVIDERS_MAP[provider_option](credentials=creds)
+            vps_payload = {
+                "host": creds.host,
+                "ssh_user": creds.ssh_user,
+                "ssh_port": creds.ssh_port,
+                "ssh_key_path": creds.ssh_key_path,
+            }
 
-        vm_result = provider.deploy_vm(region=region, config=config)
+        try:
+            vm_result = provider.deploy_vm(region=region, config=config)
+        except Exception as exc:
+            logger.debug("CLI deploy failed", exc_info=True)
+            print(f"Deployment failed:\n{describe_pulumi_error(exc)}", file=sys.stderr)
+            sys.exit(1)
+
         print(f"Deployed VM:\n{json.dumps(vm_result, indent=2)}")
-        # Optional OS-level TTL watchdog: fires `wisp destroy` even after this
-        # process exits, so a forgotten CLI session cannot bill forever. The
-        # --ttl flag wins over the configured default; 0 keeps it off.
-        ttl_minutes = (
-            args["ttl_minutes"]
-            if args["ttl_minutes"] is not None
-            else config.max_session_ttl_minutes
+
+        # Record the session even though this process is about to exit: the
+        # marker is what lets a later TUI (or `wisp destroy`) know a tunnel is
+        # still out there, and its TTL fields decide whether that session can be
+        # resumed instead of destroyed.
+        write_active_session(
+            provider_option.value,
+            region,
+            vps=vps_payload,
+            ttl_minutes=ttl_minutes,
         )
+
+        # Optional OS-level TTL watchdog: fires `wisp destroy` even after this
+        # process exits, so a forgotten CLI session cannot bill forever. This is
+        # the local layer; the in-VM watchdog armed during deploy is the remote
+        # one and survives this machine shutting down.
         if ttl_minutes and ttl_minutes > 0:
             schedule_ttl_watchdog(provider_option.value, region, ttl_minutes)
         sys.exit(0)
 
     if command == CommandEnum.DESTROY:
-        # Cancel the optional TTL watchdog before/after teardown: best effort,
-        # and harmless if it already fired or was never scheduled.
-        cancel_ttl_watchdog(provider_option.value, region)
-        # VPS: the deploy-time connection details live in the marker (the TOML
-        # may never have had them for flag-based deploys). Precedence:
-        # CLI flags > deploy-time marker > TOML [vps].
-        if provider_option == ProviderEnum.VPS:
-            marker = read_active_session()
-            marker_vps = marker.vps if marker is not None else {}
-            creds = resolve_vps_credentials()
-            creds.host = args["host"] or marker_vps.get("host") or creds.host
-            creds.ssh_user = (
-                args["ssh_user"] or marker_vps.get("ssh_user") or creds.ssh_user
-            )
-            creds.ssh_port = (
-                args["ssh_port"] or marker_vps.get("ssh_port") or creds.ssh_port
-            )
-            creds.ssh_key_path = (
-                args["ssh_key_path"]
-                or marker_vps.get("ssh_key_path")
-                or creds.ssh_key_path
-            )
-            provider = PROVIDERS_MAP[provider_option](credentials=creds)
-        delete_success = provider.delete_vm(region=region)
-        # If this destroy matches a session the TUI marked as active, clear the
-        # marker: resources are gone, and leaving it would make the next TUI
-        # startup offer to "clean up" an orphan that no longer exists.
-        active = read_active_session()
-        if (
-            active is not None
-            and active.provider == provider_option.value
-            and active.region == region
-        ):
-            clear_active_session()
-        if provider_option == ProviderEnum.VPS:
-            # Nothing is deleted on the VPS: the tunnel is torn down on both
-            # ends and Wisp's own configs are removed.
-            print("VPN tunnel removed (client disconnected, server configs cleaned).")
-        else:
-            print(f"Deleted VM. Count: {delete_success}")
+        begin_teardown(provider_option.value, region or "")
+        try:
+            # Cancel the optional TTL watchdog before/after teardown: best effort,
+            # and harmless if it already fired or was never scheduled.
+            cancel_ttl_watchdog(provider_option.value, region)
+            # VPS: the deploy-time connection details live in the marker (the TOML
+            # may never have had them for flag-based deploys). Precedence:
+            # CLI flags > deploy-time marker > TOML [vps].
+            if provider_option == ProviderEnum.VPS:
+                marker = read_active_session()
+                marker_vps = marker.vps if marker is not None else {}
+                creds = resolve_vps_credentials()
+                creds.host = args["host"] or marker_vps.get("host") or creds.host
+                creds.ssh_user = (
+                    args["ssh_user"] or marker_vps.get("ssh_user") or creds.ssh_user
+                )
+                creds.ssh_port = (
+                    args["ssh_port"] or marker_vps.get("ssh_port") or creds.ssh_port
+                )
+                creds.ssh_key_path = (
+                    args["ssh_key_path"]
+                    or marker_vps.get("ssh_key_path")
+                    or creds.ssh_key_path
+                )
+                provider = PROVIDERS_MAP[provider_option](credentials=creds)
+
+            try:
+                delete_success = provider.delete_vm(region=region)
+            except Exception as exc:
+                # Pulumi's own stack lock produces the "another operation is in
+                # progress" case; everything else is unwrapped from its output.
+                logger.debug("CLI destroy failed", exc_info=True)
+                print(
+                    f"Destroy failed:\n{describe_pulumi_error(exc)}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            # If this destroy matches a session the TUI marked as active, clear the
+            # marker: resources are gone, and leaving it would make the next TUI
+            # startup offer to "clean up" an orphan that no longer exists.
+            active = read_active_session()
+            if (
+                active is not None
+                and active.provider == provider_option.value
+                and active.region == region
+            ):
+                clear_active_session()
+            if provider_option == ProviderEnum.VPS:
+                # Nothing is deleted on the VPS: the tunnel is torn down on both
+                # ends and Wisp's own configs are removed.
+                print(
+                    "VPN tunnel removed (client disconnected, server configs cleaned)."
+                )
+            else:
+                print(f"Deleted VM. Count: {delete_success}")
+        finally:
+            end_teardown()
         sys.exit(0)
 
 
