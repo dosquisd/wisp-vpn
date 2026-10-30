@@ -29,16 +29,53 @@ Configures the remote WireGuard server using Paramiko (SSH/SFTP):
    the SSH user's home directory) and downloads it via SFTP to
    `WISP_DATA_DIR/wireguard-confs/wg0-client.conf` (creating the parent
    directory first).
+5. Ensures `PersistentKeepalive = 25` is in the client configuration
+   (`ensure_persistent_keepalive`).
+6. Arms the autonomous in-VM session watchdog timer (`install_session_watchdog`).
 
 See [deployment flow](../deployment-flow.md#deploy).
+
+### `ensure_persistent_keepalive(conf_path: Path) -> bool`
+
+Ensures `PersistentKeepalive = 25` is present in the WireGuard client configuration
+file under the `[Peer]` section. Because the in-VM watchdog checks handshake recency
+to detect session abandonment, keepalive packets are required so that an
+idle-but-connected tunnel continues generating handshakes and is not falsely
+terminated. Returns `True` if added, `False` if already present or on error.
+
+### `build_watchdog_config(nic: str, mode: str, ttl_minutes: int, idle_seconds: int, server_started_epoch: int) -> str`
+
+Generates the `/etc/wisp/watchdog-<nic>.conf` shell configuration for the in-VM
+watchdog script. Computes `DEADLINE_EPOCH` from `server_started_epoch + ttl_minutes * 60`
+(or `0` when unlimited).
+
+### `install_session_watchdog(ssh, *, nic, mode, ttl_minutes, idle_seconds, ssh_user) -> bool`
+
+Installs and enables the in-VM session watchdog systemd timer on the remote server:
+
+- Reads remote server time via `date +%s` to compute deadlines against the server's
+  own clock, eliminating client/server clock skew.
+- Uploads the packaged `wisp-watchdog.sh` (`WATCHDOG_SCRIPT_PATH`) via SFTP to
+  `/usr/local/bin/wisp-watchdog` (mode `0755`).
+- Writes `/etc/wisp/watchdog-<nic>.conf` (mode `0600`).
+- Writes templated systemd units `/etc/systemd/system/wisp-watchdog@.service` and
+  `wisp-watchdog@.timer` (configured to run every 60 seconds).
+- Runs `systemctl daemon-reload` and enables/starts `wisp-watchdog@<nic>.timer`.
 
 ### `remove_wisp_server_configs(ssh_user, instance_ip, ssh_key_file="", on_progress=None) -> bool`
 
 Tears down every Wisp-created WireGuard interface on a remote server
-(used by the VPS provider's `delete_vm`). For each
-`/etc/wireguard/wisp-*.conf`: `wg-quick down <nic>` (the config's `PostDown`
-rules remove the iptables/firewall rules the installer added),
-`systemctl disable --now wg-quick@<nic>`, and deletion of the config file.
+(used by the VPS provider's `delete_vm`).
+1. Disarms the watchdog for each interface: disables `wisp-watchdog@<nic>.timer`
+   and removes `/etc/wisp/watchdog-<nic>.conf`.
+2. For each `/etc/wireguard/wisp-*.conf`: `wg-quick down <nic>` (the config's
+   `PostDown` rules remove the iptables/firewall rules the installer added),
+   `systemctl disable --now wg-quick@<nic>`, and deletes the config file and
+   client configs.
+3. If `/etc/wireguard/params` is owned by the Wisp interface, it is removed.
+4. Checks if any other `/etc/wisp/watchdog-*.conf` remains. If no other Wisp
+   sessions exist on the server, removes `/etc/systemd/system/wisp-watchdog@.*`,
+   `/usr/local/bin/wisp-watchdog`, reloads systemd, and removes `/etc/wisp`.
 Only `wisp-*` files are matched — a pre-existing `wg0.conf` or any other
 config is never touched, and packages are kept. Best effort per interface:
 a failed step for one config does not stop the rest. Returns `False` when
@@ -63,6 +100,7 @@ raises a descriptive `PermissionError` if the socket cannot be connected
 
 `TypedDict` of the variables consumed by `configure_remote_server`:
 SSH user, instance IP, SSH key file, WireGuard port, allowed IPs, public IP,
-interface, IPv4/IPv6, DNS 1/2, client name, client IPv4/IPv6, and
-`skip_client`. Populated during deploy from the Pulumi stack outputs and the
+interface, IPv4/IPv6, DNS 1/2, client name, client IPv4/IPv6, `skip_client`,
+`watchdog_mode` (`"cloud"` or `"vps"`), `watchdog_ttl_minutes`, and
+`watchdog_idle_seconds`. Populated during deploy from provider outputs and the
 active `WispConfig`.

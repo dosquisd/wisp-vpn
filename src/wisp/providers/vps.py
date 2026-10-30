@@ -24,6 +24,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from wisp.config.constants import (
+    DEFAULT_WATCHDOG_IDLE_SECONDS,
     WIREGUARD_CLIENT_CONF_PATH,
     WIREGUARD_CLIENT_NAME,
     WIREGUARD_DNS1,
@@ -180,6 +181,9 @@ class VPSProvider(BaseProvider):
             wireguard_client_ipv4="",
             wireguard_client_ipv6="",
             wireguard_skip_client="n",
+            watchdog_mode="vps",
+            watchdog_ttl_minutes=config.max_session_ttl_minutes,
+            watchdog_idle_seconds=DEFAULT_WATCHDOG_IDLE_SECONDS,
         )
 
         # Re-deploys: the installer detects leftover state (/etc/wireguard/

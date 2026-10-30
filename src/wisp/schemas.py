@@ -5,12 +5,13 @@ from typing import TypedDict
 
 
 class InventoryContext(TypedDict):
-    """Variables consumed by the Ansible inventory template
-    (``templates/inventory.ini.j2``).
+    """Configuration variables consumed during remote server setup.
 
-    Populated during deploy from the Pulumi stack outputs and the active
-    :class:`~wisp.config.settings.WispConfig`, then rendered into
-    ``inventory/inventory.ini``.
+    Populated during deploy from provider outputs and the active
+    :class:`~wisp.config.settings.WispConfig`, then consumed by
+    :func:`~wisp.wireguard.remote_server.configure_remote_server` to configure
+    the remote WireGuard server, download client credentials, and install the
+    in-VM session watchdog.
     """
 
     ssh_user: str
@@ -28,3 +29,6 @@ class InventoryContext(TypedDict):
     wireguard_client_ipv4: str
     wireguard_client_ipv6: str
     wireguard_skip_client: str
+    watchdog_mode: str
+    watchdog_ttl_minutes: int
+    watchdog_idle_seconds: int

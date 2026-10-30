@@ -5,10 +5,12 @@ import socket
 import stat
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import paramiko
 
 from wisp.config.constants import (
+    WATCHDOG_SCRIPT_PATH,
     WIREGUARD_CLIENT_CONF_PATH,
     WIREGUARD_SCRIPT_PATH,
 )
@@ -174,6 +176,15 @@ def remove_wisp_server_configs(
             logger.info(f"Tearing down Wisp interface '{nic}' on {instance_ip}")
             # Best effort per interface: a missing/failed step for one config
             # must not stop the rest of the cleanup.
+            # Disarm the in-VM watchdog first: a destroyed session must not
+            # leave a timer behind that fires against an interface which no
+            # longer exists.
+            _run_remote(
+                ssh,
+                f"{prefix}systemctl disable --now wisp-watchdog@{nic}.timer "
+                "2>/dev/null || true",
+            )
+            _run_remote(ssh, f"{prefix}rm -f /etc/wisp/watchdog-{nic}.conf")
             _run_remote(ssh, f"{prefix}wg-quick down {nic} 2>/dev/null || true")
             _run_remote(
                 ssh,
@@ -204,6 +215,18 @@ def remove_wisp_server_configs(
                 " /etc/wireguard/params 2>/dev/null"
                 " && rm -f /etc/wireguard/params' || true",
             )
+            # The watchdog script and its unit templates are shared by every
+            # session on the server: remove them only once the last watchdog
+            # config is gone, so another session's timer keeps working.
+            _run_remote(
+                ssh,
+                f"{prefix}sh -c 'ls /etc/wisp/watchdog-*.conf >/dev/null 2>&1 || {{"
+                " rm -f /etc/systemd/system/wisp-watchdog@.service"
+                " /etc/systemd/system/wisp-watchdog@.timer"
+                " /usr/local/bin/wisp-watchdog;"
+                " systemctl daemon-reload;"
+                " rmdir /etc/wisp 2>/dev/null; }}'",
+            )
             _report(f"Removed {len(nics)} Wisp interface(s) from the server.", 0.9)
         else:
             _report("No Wisp interfaces found on the server.", 0.9)
@@ -211,6 +234,232 @@ def remove_wisp_server_configs(
     finally:
         ssh.close()
         logger.debug("SSH connection closed")
+
+
+def ensure_persistent_keepalive(conf_path: Path) -> bool:
+    """Ensure PersistentKeepalive = 25 is present in the WireGuard client config.
+
+    The in-VM watchdog decides whether a session is abandoned from the age of
+    the last WireGuard handshake. Without keepalive packets, an idle-but-healthy
+    tunnel emits no handshakes and would be killed by mistake.
+
+    Args:
+        conf_path (Path): Path to the WireGuard client configuration file.
+
+    Returns:
+        bool: True if ``PersistentKeepalive = 25`` was added, False if it was
+        already present, the ``[Peer]`` section was missing, or an error occurred.
+
+    Raises:
+        None: Never raises; errors are logged as debug messages and return False.
+    """
+    try:
+        if not conf_path.is_file():
+            logger.debug(
+                f"Client configuration file not found for keepalive check: {conf_path}"
+            )
+            return False
+
+        content = conf_path.read_text(encoding="utf-8")
+
+        # Check if PersistentKeepalive already exists (case-insensitive key match)
+        if re.search(
+            r"^\s*persistentkeepalive\s*=", content, re.IGNORECASE | re.MULTILINE
+        ):
+            return False
+
+        # Verify [Peer] section exists
+        if not re.search(r"^\s*\[peer\]\s*$", content, re.IGNORECASE | re.MULTILINE):
+            logger.debug(
+                f"No [Peer] section found in client configuration: {conf_path}"
+            )
+            return False
+
+        separator = "" if content.endswith("\n") else "\n"
+        new_content = f"{content}{separator}PersistentKeepalive = 25\n"
+        conf_path.write_text(new_content, encoding="utf-8")
+        logger.debug(f"Added PersistentKeepalive = 25 to {conf_path}")
+        return True
+    except Exception as exc:
+        logger.debug(f"Failed to ensure PersistentKeepalive in {conf_path}: {exc}")
+        return False
+
+
+def build_watchdog_config(
+    nic: str,
+    mode: str,
+    ttl_minutes: int,
+    idle_seconds: int,
+    server_started_epoch: int,
+) -> str:
+    """Build the configuration file content for the in-VM session watchdog.
+
+    Args:
+        nic (str): WireGuard interface name (e.g. ``"wg0"`` or ``"wisp-abc"``).
+        mode (str): Watchdog mode (``"cloud"`` or ``"vps"``).
+        ttl_minutes (int): Hard session TTL cap in minutes (0 to disable).
+        idle_seconds (int): Maximum seconds without handshake before idle teardown.
+        server_started_epoch (int): Server timestamp (epoch seconds) when started.
+
+    Returns:
+        str: The content for the watchdog configuration file.
+    """
+    deadline_epoch = server_started_epoch + ttl_minutes * 60 if ttl_minutes > 0 else 0
+    return (
+        f'NIC="{nic}"\n'
+        f'MODE="{mode}"\n'
+        f"IDLE_SECONDS={idle_seconds}\n"
+        f"DEADLINE_EPOCH={deadline_epoch}\n"
+        f"SESSION_STARTED_EPOCH={server_started_epoch}\n"
+    )
+
+
+def install_session_watchdog(
+    ssh: paramiko.SSHClient,
+    *,
+    nic: str,
+    mode: str,
+    ttl_minutes: int,
+    idle_seconds: int,
+    ssh_user: str,
+) -> bool:
+    """Install and enable the in-VM session watchdog systemd timer on the remote server.
+
+    Provisions an autonomous dead man's switch inside the server to self-destruct
+    an abandoned session even if the user's local machine shuts down or disconnects.
+
+    Args:
+        ssh (paramiko.SSHClient): Connected SSH client for the remote server.
+        nic (str): WireGuard interface name (e.g. ``"wg0"`` or ``"wisp-abc"``).
+        mode (str): Watchdog mode (``"cloud"`` or ``"vps"``).
+        ttl_minutes (int): Hard session TTL cap in minutes (0 to disable).
+        idle_seconds (int): Maximum seconds without handshake before idle teardown.
+        ssh_user (str): Remote username with sudo privileges.
+
+    Returns:
+        bool: True if the watchdog timer was successfully installed and enabled,
+        False on any failure.
+
+    Raises:
+        None: Never raises; errors are logged as warnings and return False.
+    """
+    try:
+        if not re.match(r"^[a-zA-Z0-9_-]+$", nic):
+            logger.warning(
+                f"Refusing to install session watchdog: invalid interface name '{nic}'"
+            )
+            return False
+
+        # Read the current epoch from the server's clock to avoid client/server skew
+        exit_status, stdout, stderr = _run_remote(ssh, "date +%s")
+        if exit_status != 0:
+            logger.warning(f"Failed to read remote server timestamp: {stderr.strip()}")
+            return False
+
+        try:
+            server_now = int(stdout.strip())
+        except ValueError:
+            logger.warning(f"Unexpected date output from server: '{stdout.strip()}'")
+            return False
+
+        session_started_epoch = server_now
+
+        remote_script_path = "/tmp/wisp-watchdog"
+        remote_conf_path = f"/tmp/wisp-watchdog-{nic}.conf"
+        service_unit_path = "/tmp/wisp-watchdog@.service"
+        timer_unit_path = "/tmp/wisp-watchdog@.timer"
+
+        # Upload script, configuration file, and systemd units via SFTP
+        sftp = ssh.open_sftp()
+        try:
+            sftp.put(str(WATCHDOG_SCRIPT_PATH), remote_script_path)
+            sftp.chmod(
+                remote_script_path,
+                stat.S_IRWXU
+                | stat.S_IRGRP
+                | stat.S_IXGRP
+                | stat.S_IROTH
+                | stat.S_IXOTH,
+            )
+
+            conf_content = build_watchdog_config(
+                nic=nic,
+                mode=mode,
+                ttl_minutes=ttl_minutes,
+                idle_seconds=idle_seconds,
+                server_started_epoch=session_started_epoch,
+            )
+            with sftp.file(remote_conf_path, "w") as conf_file:
+                conf_file.write(conf_content)
+            sftp.chmod(remote_conf_path, stat.S_IRUSR | stat.S_IWUSR)
+
+            service_unit_content = (
+                "[Unit]\n"
+                "Description=Wisp session watchdog (%i)\n\n"
+                "[Service]\n"
+                "Type=oneshot\n"
+                "ExecStart=/usr/local/bin/wisp-watchdog %i\n"
+            )
+            with sftp.file(service_unit_path, "w") as svc_file:
+                svc_file.write(service_unit_content)
+            sftp.chmod(
+                service_unit_path,
+                stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH,
+            )
+
+            timer_unit_content = (
+                "[Unit]\n"
+                "Description=Wisp session watchdog timer (%i)\n\n"
+                "[Timer]\n"
+                "OnBootSec=60\n"
+                "OnUnitActiveSec=60\n\n"
+                "[Install]\n"
+                "WantedBy=timers.target\n"
+            )
+            with sftp.file(timer_unit_path, "w") as timer_file:
+                timer_file.write(timer_unit_content)
+            sftp.chmod(
+                timer_unit_path,
+                stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH,
+            )
+        finally:
+            sftp.close()
+
+        prefix = "" if ssh_user == "root" else "sudo -n "
+        install_cmd = (
+            f"{prefix}mkdir -p /etc/wisp && "
+            f"{prefix}install -m 0755 {remote_script_path} /usr/local/bin/wisp-watchdog && "
+            f"{prefix}install -m 0600 {remote_conf_path} /etc/wisp/watchdog-{nic}.conf && "
+            f"{prefix}install -m 0644 {service_unit_path} /etc/systemd/system/wisp-watchdog@.service && "
+            f"{prefix}install -m 0644 {timer_unit_path} /etc/systemd/system/wisp-watchdog@.timer && "
+            f"{prefix}systemctl daemon-reload && "
+            f"{prefix}systemctl enable --now wisp-watchdog@{nic}.timer"
+        )
+        exit_status, stdout, stderr = _run_remote(ssh, install_cmd)
+
+        # Clean up temporary staging files from /tmp best-effort
+        _run_remote(
+            ssh,
+            f"rm -f {remote_script_path} {remote_conf_path} "
+            f"{service_unit_path} {timer_unit_path}",
+        )
+
+        if exit_status != 0:
+            logger.warning(
+                f"Failed to install systemd watchdog units for '{nic}': {stderr.strip()}"
+            )
+            return False
+
+        logger.info(
+            f"In-server session watchdog installed and armed for '{nic}' "
+            f"(mode={mode}, ttl_minutes={ttl_minutes}, idle_seconds={idle_seconds})"
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            f"Unexpected error installing session watchdog for '{nic}': {exc}"
+        )
+        return False
 
 
 def configure_remote_server(
@@ -408,13 +657,30 @@ def configure_remote_server(
             )
 
         logger.debug(f"Downloading client config from {remote_conf_path}")
-        from pathlib import Path
 
         Path(WIREGUARD_CLIENT_CONF_PATH).parent.mkdir(parents=True, exist_ok=True)
         sftp.get(remote_conf_path, str(WIREGUARD_CLIENT_CONF_PATH))
         sftp.close()
 
         logger.info(f"Client configuration downloaded to {WIREGUARD_CLIENT_CONF_PATH}")
+
+        # Ensure PersistentKeepalive is set so an idle client sends keepalives,
+        # preventing the in-VM watchdog from falsely flagging a healthy session as abandoned.
+        ensure_persistent_keepalive(WIREGUARD_CLIENT_CONF_PATH)
+
+        # Install and arm the in-VM session watchdog
+        _report("Arming the in-server session watchdog...", 0.95)
+        try:
+            install_session_watchdog(
+                ssh,
+                nic=wireguard_interface,
+                mode=inventory_context.get("watchdog_mode", "cloud"),
+                ttl_minutes=int(inventory_context.get("watchdog_ttl_minutes", 0)),
+                idle_seconds=int(inventory_context.get("watchdog_idle_seconds", 900)),
+                ssh_user=ssh_user,
+            )
+        except Exception as exc:
+            logger.warning(f"Could not install session watchdog: {exc}")
 
     finally:
         ssh.close()

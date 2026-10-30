@@ -32,6 +32,9 @@ DEFAULT_VM_BOOT_TIMEOUT_SECONDS: int = 60
 # Default session TTL for the optional OS-level watchdog (1 hour).
 DEFAULT_SESSION_TTL_MINUTES: int = 60
 
+# Default idle timeout before the in-VM watchdog triggers teardown (15 minutes).
+DEFAULT_WATCHDOG_IDLE_SECONDS: int = 60 * 15
+
 
 def _data_dir() -> Path:
     """Resolve the base data directory for Wisp.
@@ -84,6 +87,18 @@ def _script_path() -> Path:
     return Path(str(files("wisp") / "data" / "wireguard-server-install.sh"))
 
 
+def _watchdog_script_path() -> Path:
+    """Resolve the session watchdog script path from package data.
+
+    Wheels install unzipped, so the packaged file is a real filesystem path
+    and a plain ``Path`` is safe here (no context-managed ``as_file`` needed).
+
+    Returns:
+        Path: Path to the packaged ``wisp/data/wisp-watchdog.sh``.
+    """
+    return Path(str(files("wisp") / "data" / "wisp-watchdog.sh"))
+
+
 WISP_DATA_DIR: Path = _data_dir()
 WIREGUARD_KEYS_DIR: Path = WISP_DATA_DIR / "keys"
 WIREGUARD_KEY_PATH: Path = WIREGUARD_KEYS_DIR / "wireguard-key.pem"
@@ -102,6 +117,9 @@ WISP_LOG_DIR: Path = _log_dir()
 
 # WireGuard server installer script (packaged data)
 WIREGUARD_SCRIPT_PATH: Path = _script_path()
+
+# Session watchdog script (packaged data)
+WATCHDOG_SCRIPT_PATH: Path = _watchdog_script_path()
 
 
 def ensure_data_dir() -> Path:

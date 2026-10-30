@@ -13,6 +13,7 @@ from typing import TypedDict
 from tqdm import tqdm
 
 from wisp.config.constants import (
+    DEFAULT_WATCHDOG_IDLE_SECONDS,
     WIREGUARD_CLIENT_CONF_PATH,
     WIREGUARD_CLIENT_NAME,
     WIREGUARD_DNS1,
@@ -198,6 +199,9 @@ class PulumiProvider(BaseProvider, ABC):
             wireguard_client_ipv4="",
             wireguard_client_ipv6="",
             wireguard_skip_client="n",
+            watchdog_mode="cloud",
+            watchdog_ttl_minutes=config.max_session_ttl_minutes,
+            watchdog_idle_seconds=DEFAULT_WATCHDOG_IDLE_SECONDS,
         )
 
         if on_progress:

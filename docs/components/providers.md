@@ -47,7 +47,10 @@ config (`load_wisp_config()` from TOML when `None`), creates/selects the
 provider-specific stack, runs `stack.up()`, waits `config.vm_boot_timeout`
 seconds, persists the SSH key, configures the remote server over SSH/SFTP
 (`configure_remote_server`), and connects the local client through the daemon.
-Subclasses implement `_create_pulumi_program(...)` and `get_available_regions()`.
+Populates `InventoryContext` with `watchdog_mode="cloud"`,
+`watchdog_ttl_minutes=config.max_session_ttl_minutes`, and
+`watchdog_idle_seconds=DEFAULT_WATCHDOG_IDLE_SECONDS` (900s). Subclasses implement
+`_create_pulumi_program(...)` and `get_available_regions()`.
 
 ## `providers/aws/`
 
@@ -72,9 +75,11 @@ Module-level `_plugins_ready` flag guards `ensure_plugins()`, which installs the
 - `create_ec2_instance(region, /, force_current_ip=False, *, ...)` — the program
   passed to Pulumi. Creates the SG, an RSA 4096 `tls.PrivateKey`
   (`algorithm="RSA", rsa_bits=4096`), an `aws.ec2.KeyPair` from its OpenSSH
-  public key, and the `aws.ec2.Instance`. Exports: `instance_id`,
-  `instance_public_ip`, `instance_private_ip`, `instance_private_key`,
-  `wireguard_port`, `ssh_user`.
+  public key, and the `aws.ec2.Instance` with
+  `instance_initiated_shutdown_behavior="terminate"` (ensuring guest-initiated
+  `poweroff` terminates the instance and deletes its root volume). Exports:
+  `instance_id`, `instance_public_ip`, `instance_private_ip`,
+  `instance_private_key`, `wireguard_port`, `ssh_user`.
 
 ### `provider.py` — `AWSProvider(PulumiProvider)`
 
@@ -116,7 +121,9 @@ Module-level `_plugins_ready` flag guards `ensure_plugins()`, which installs the
   — the program passed to Pulumi. Wires everything together, generates an
   RSA 4096 `tls.PrivateKey` (`algorithm="RSA", rsa_bits=4096`), and exports:
   `instance_id`, `instance_public_ip`, `instance_private_ip`,
-  `instance_private_key`, `wireguard_port`, `ssh_user`.
+  `instance_private_key`, `wireguard_port`, `ssh_user`. On in-guest `poweroff`,
+  the compute instance transitions to stopped, terminating compute charges while
+  its boot volume persists until stack destruction.
 
 ### `provider.py` — `OCIProvider(PulumiProvider)`
 
@@ -195,9 +202,10 @@ deliberately out of scope.
 - `deploy_vm(...)` — skips provisioning and boot wait entirely: validates the
   host and key path, generates a Wisp-namespaced server-side interface name
   (`wisp-<8 hex>`, within the installer's 16-char limit — a VPS already
-  running its own `wg0` never collides), runs the same installer via
-  `configure_remote_server`, reads the real port back from the downloaded
-  client config, and connects the local client. Returns the host as
+  running its own `wg0` never collides), passes `watchdog_mode="vps"` in
+  `InventoryContext` so the watchdog never halts the machine, runs the same
+  installer via `configure_remote_server`, reads the real port back from the
+  downloaded client config, and connects the local client. Returns the host as
   `instance_id`/`public_ip`.
 - `delete_vm(...)` — tears the tunnel down on BOTH ends:
   `remove_wisp_server_configs()` SSHes in and for every
