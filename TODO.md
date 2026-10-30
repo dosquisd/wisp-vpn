@@ -50,7 +50,7 @@ Depends on PyPI. Pattern: `curl -fsSL <url>/install.sh | bash`.
 - [X] Delegate the privileged part to `sudo wisp daemon install` (single
   source of truth; the bootstrap role is filled by `scripts/install.sh` —
   `setup.sh` was deleted)
-- [ ] Windows equivalent (`setup.ps1` parity)
+- [X] Windows equivalent (`setup.ps1` parity)
 
 ## `wisp doctor` (CLI diagnostics)
 
