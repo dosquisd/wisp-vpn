@@ -268,6 +268,20 @@ class PulumiProvider(BaseProvider, ABC):
         except Exception as e:  # noqa: BLE001
             logger.debug(f"Pulumi cancel skipped: {e}")
 
+        # The session may already be gone: the in-VM watchdog powers the VM off
+        # (terminating it on AWS/GCP) as soon as the session looks abandoned. A
+        # refresh reconciles the stack state with the cloud first, so destroy does
+        # not fail on resources that no longer exist and does not leave the stack
+        # pointing at a deleted instance. Best effort: a refresh can legitimately
+        # fail (expired credentials, provider outage) and destroy must still be
+        # attempted against the last known state.
+        try:
+            if on_progress:
+                on_progress("Reconciling infrastructure state...", 0.25)
+            stack.refresh()
+        except Exception as exc:
+            logger.warning(f"Stack refresh before destroy failed (continuing): {exc}")
+
         if on_progress:
             on_progress("Destroying provider infrastructure...", 0.4)
         logger.debug("Destroying Pulumi stack...")

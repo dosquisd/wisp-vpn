@@ -82,6 +82,55 @@ class ActiveSession(dict):
             return 0.0
 
     @property
+    def ttl_minutes(self) -> int:
+        """Configured session TTL cap in minutes (0 if unlimited)."""
+        try:
+            return int(self.get("ttl_minutes", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def expires_at(self) -> float:
+        """Unix timestamp when the session expires (0.0 if unlimited)."""
+        try:
+            return float(self.get("expires_at", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @property
+    def has_ttl(self) -> bool:
+        """Return True if the session has an expiration timestamp configured."""
+        return self.expires_at > 0.0
+
+    def is_expired(self, now: float | None = None) -> bool:
+        """Return True if the session has a TTL and the deadline has passed.
+
+        Args:
+            now (float | None): Current timestamp, or None to use ``time.time()``.
+
+        Returns:
+            bool: False when there is no TTL; otherwise True when ``now >= expires_at``.
+        """
+        if not self.has_ttl:
+            return False
+        current_time = time.time() if now is None else now
+        return current_time >= self.expires_at
+
+    def is_resumable(self, now: float | None = None) -> bool:
+        """Return True when a TTL exists and it has not yet expired.
+
+        A restart inside the TTL window may leave a live tunnel that is worth
+        re-attaching instead of destroying.
+
+        Args:
+            now (float | None): Current timestamp, or None to use ``time.time()``.
+
+        Returns:
+            bool: True when a TTL exists and has not expired, False otherwise.
+        """
+        return self.has_ttl and not self.is_expired(now=now)
+
+    @property
     def uptime_seconds(self) -> float:
         """Seconds elapsed since the session was created."""
         if not self.started_at:
@@ -109,7 +158,7 @@ class ActiveSession(dict):
         )
 
 
-def _process_alive(pid: int) -> bool:
+def process_alive(pid: int) -> bool:
     """Return True if a process with ``pid`` currently exists.
 
     Args:
@@ -167,7 +216,12 @@ def _windows_process_alive(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
-def write_active_session(provider: str, region: str, vps: dict | None = None) -> None:
+def write_active_session(
+    provider: str,
+    region: str,
+    vps: dict | None = None,
+    ttl_minutes: int = 0,
+) -> None:
     """Record the active tunnel in the marker file.
 
     Args:
@@ -177,12 +231,18 @@ def write_active_session(provider: str, region: str, vps: dict | None = None) ->
             (``host``, ``ssh_user``, ``ssh_port``, ``ssh_key_path``) so a
             later destroy tears down the right server without depending on
             the TOML ``[vps]`` section.
+        ttl_minutes (int): Session time-to-live cap in minutes (default 0 for
+            unlimited). When greater than 0, calculates and stores ``expires_at``.
     """
-    payload = {
+    started_at = time.time()
+    expires_at = started_at + ttl_minutes * 60.0 if ttl_minutes > 0 else 0.0
+    payload: dict[str, Any] = {
         "provider": provider,
         "region": region,
         "pid": os.getpid(),
-        "started_at": time.time(),
+        "started_at": started_at,
+        "ttl_minutes": int(ttl_minutes),
+        "expires_at": float(expires_at),
     }
     if vps:
         payload["vps"] = vps
@@ -235,7 +295,7 @@ def find_orphaned_session() -> ActiveSession | None:
     session = read_active_session()
     if session is None:
         return None
-    if session.pid == os.getpid() or _process_alive(session.pid):
+    if session.pid == os.getpid() or process_alive(session.pid):
         return None
     return session
 
@@ -280,6 +340,17 @@ class SessionGuard:
             if self._finished:
                 return
             self._teardown = teardown
+
+    def disarm(self) -> None:
+        """Detach the teardown without running it.
+
+        Used when the session no longer needs local protection: the tunnel is
+        already gone (the remote watchdog destroyed it) or another process owns the
+        teardown. Running the teardown afterwards would be a no-op at best and a
+        double destroy at worst.
+        """
+        with self._lock:
+            self._teardown = None
 
     def shutdown(self, reason: str) -> bool:
         """Run the teardown once, if it has not run yet.
@@ -355,6 +426,13 @@ def teardown_active_session(
     daemon is unreachable the cloud teardown still runs, because a missing local
     daemon is not a reason to leave a paid VM running.
 
+    Concurrent updates are Pulumi's problem, not ours: the stack backend already
+    locks an update, so a second destroy raises
+    :class:`pulumi.automation.errors.ConcurrentUpdateError` instead of corrupting
+    state. Callers surface that as a "another Wisp operation is in progress"
+    message. A teardown notice is written for the duration of the destroy only so
+    a running TUI can show what is happening.
+
     Args:
         provider_name (str): Provider name owning the session.
         region (str): Region whose resources should be destroyed.
@@ -366,37 +444,44 @@ def teardown_active_session(
         Exception: Whatever the provider's ``delete_vm`` raises, after the local
             tunnel has been attempted.
     """
+    from wisp.utils.operations import begin_teardown, end_teardown
 
     def report(message: str, progress: float | None = None) -> None:
         if on_progress is not None:
             on_progress(message, progress)
 
-    # Cancel the optional OS-level TTL watchdog first: teardown is happening
-    # right now, so the scheduled `wisp destroy` must not fire later. Best
-    # effort — a missed cancel is harmless (the destroy is idempotent).
+    begin_teardown(provider_name, region)
     try:
-        cancel_ttl_watchdog(provider_name, region)
-    except Exception as exc:
-        logger.debug(f"TTL watchdog cancel skipped: {exc}")
+        # Cancel the optional OS-level TTL watchdog first: teardown is happening
+        # right now, so the scheduled `wisp destroy` must not fire later. Best
+        # effort — a missed cancel is harmless (the destroy is idempotent).
+        try:
+            cancel_ttl_watchdog(provider_name, region)
+        except Exception as exc:
+            logger.debug(f"TTL watchdog cancel skipped: {exc}")
 
-    report("Disconnecting the local tunnel...", 0.1)
-    try:
-        response = disconnect_wireguard_client()
-        if not response.ok:
-            logger.warning(f"Could not bring the local tunnel down: {response.message}")
-    except Exception as exc:
-        logger.warning(f"Local tunnel teardown skipped: {exc}")
+        report("Disconnecting the local tunnel...", 0.1)
+        try:
+            response = disconnect_wireguard_client()
+            if not response.ok:
+                logger.warning(
+                    f"Could not bring the local tunnel down: {response.message}"
+                )
+        except Exception as exc:
+            logger.warning(f"Local tunnel teardown skipped: {exc}")
 
-    report("Destroying cloud resources...", 0.4)
-    provider = _destroy_provider(provider_name)
-    provider.delete_vm(region=region, on_progress=on_progress)
+        report("Destroying cloud resources...", 0.4)
+        provider = _destroy_provider(provider_name)
+        provider.delete_vm(region=region, on_progress=on_progress)
 
-    # The marker is the single source of truth for "there are resources out
-    # there". Reaching this line means they are gone, so the marker must follow
-    # suit — otherwise the menu keeps offering to clean up an orphan whose cloud
-    # resources no longer exist. A raise above (failed delete_vm) deliberately
-    # skips this, so the next run can still detect and offer the cleanup.
-    clear_active_session()
+        # The marker is the single source of truth for "there are resources out
+        # there". Reaching this line means they are gone, so the marker must follow
+        # suit — otherwise the menu keeps offering to clean up an orphan whose cloud
+        # resources no longer exist. A raise above (failed delete_vm) deliberately
+        # skips this, so the next run can still detect and offer the cleanup.
+        clear_active_session()
+    finally:
+        end_teardown()
 
 
 def _leave_alternate_screen() -> None:
