@@ -35,6 +35,7 @@ list, see `ProviderEnum`
 ```text
 src/wisp/
 ├── main.py                 # Entry point; argparse CLI + TUI dispatch; wisp console script
+├── doctor.py               # Read-only diagnostic checks and report rendering (wisp doctor)
 ├── schemas.py              # Shared TypedDicts (InventoryContext: SSH/WireGuard deploy context)
 ├── cli/                    # Textual TUI
 │   ├── app.py              # WispApp (styles, screen registration, startup adoption)
@@ -294,6 +295,11 @@ resolved per user via `platformdirs` (env overrides `WISP_DATA_DIR`,
   state (no program run), counts real resources, and with `--destroy` tears
   them down. `--refresh` reconciles state against the cloud first, so
   out-of-band deletions stop counting as leftovers.
+- **`wisp doctor`** is strictly read-only, exits 1 only on FAIL (WARN and SKIP
+  exit 0), and its checks must never create directories or write files. FAIL is
+  reserved for machine-wide blockers (daemon, WireGuard tools, runtime
+  directories); provider-specific gaps (Pulumi, per-provider credentials) are
+  WARN, because which provider to deploy to is the user's decision.
 
 ## Provider-specific notes
 

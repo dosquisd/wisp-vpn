@@ -163,6 +163,12 @@ What it does, in order:
 > `wisp` group membership takes effect. Until then, connecting to the daemon
 > socket fails with a `PermissionError`.
 
+Once installed and logged in, verify your system with `wisp doctor`:
+
+```bash
+wisp doctor
+```
+
 ### Windows
 
 The installation is performed with `scripts/install.ps1`, which is
@@ -176,6 +182,12 @@ native Windows service for the daemon:
 5. Creates the `wisp` local group and adds the current user to it.
 6. Installs the Wisp Windows service from the uv-managed environment.
 7. Starts the Wisp service and records an install manifest.
+
+Verify the installation by opening a new terminal and running:
+
+```powershell
+wisp doctor
+```
 
 The daemon supports both systemd socket activation (Linux) and Windows Named
 Pipes (`WindowsNamedPipeTransport`) for communication with the CLI/TUI.

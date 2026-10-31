@@ -54,20 +54,20 @@ Depends on PyPI. Pattern: `curl -fsSL <url>/install.sh | bash`.
 
 ## `wisp doctor` (CLI diagnostics)
 
-Read-only health check; every check already exists as a building block.
+Read-only health check; every check already exists as a building block. Exits
+code 0 when all checks pass, warn, or skip; exits 1 when any check fails. Only
+machine-wide blockers fail (daemon, WireGuard tools, runtime directories);
+provider-specific gaps (Pulumi, per-provider credentials) warn instead.
 
-- [ ] Daemon: socket reachable + version (Linux: `systemctl status wisp`;
-  Windows: `Get-Service WispService`)
-- [ ] User in the `wisp` group **and** membership active in the session
-- [ ] WireGuard tools present (`wg`, `wg-quick`)
-- [ ] Pulumi CLI present + backend authenticated (`pulumi whoami`)
-- [ ] Cloud credentials per provider (reuse `validate_*_credentials` pings
-  with bounded timeouts)
-- [ ] TTL watchdog availability (`systemd-run --user` / `schtasks`)
-- [ ] Orphan marker state (warn + point at the cleanup flow)
-- [ ] Writable runtime dirs (data/keys/logs once `platformdirs` lands)
-- [ ] Checklist output with per-item hints (this becomes the standard first
-  step of every bug report)
+- [X] Daemon: socket reachable + version (Linux: `/run/wisp.sock` stat + `status_wireguard_client()`; Windows: `sc.exe query WispService` + named pipe probe)
+- [X] User in the `wisp` group **and** membership active in the session (Linux: `grp.getgrnam` + `os.getgroups()`/`os.getgid()`; Windows: `whoami /groups` Administrator SID)
+- [X] WireGuard tools present (`wg`, `wg-quick` on Linux; `wireguard.exe` on Windows)
+- [X] Pulumi CLI present + backend authenticated (`pulumi whoami` with 15s timeout; checks `~/.pulumi/bin` fallback; warns instead of failing since Custom VPS does not need it)
+- [X] Cloud credentials per provider (reuse `validate_*_credentials` pings with 5s bounded timeouts via daemon threads; skips unconfigured providers; a rejected configured provider warns, never fails, because provider choice is the user's)
+- [X] TTL watchdog availability (`systemd-run` / `schtasks`; skips when TTL <= 0)
+- [X] Orphan marker state (`read_active_session()` + `process_alive()` / `is_expired()`; actionable destroy hint)
+- [X] Writable runtime dirs (`WISP_DATA_DIR`, `WISP_CONFIG_DIR`, `WISP_LOG_DIR`, `WIREGUARD_KEYS_DIR`; tests nearest existing ancestor via `os.access`)
+- [X] Checklist output with per-item hints (greppable plain text with aligned status tags and failure hints; standard first step for bug reports)
 
 ## `wisp daemon install` (Linux parity with Windows)
 

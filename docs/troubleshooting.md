@@ -7,6 +7,20 @@ usually names the exact step. Daemon-side issues are diagnosed with
 `journalctl -u wisp.service` on Linux; on Windows the daemon logs to
 `C:\ProgramData\wisp\logs\wisp.log`.
 
+## Run wisp doctor first
+
+Before manually diagnosing issues, run `wisp doctor`:
+
+```bash
+wisp doctor
+```
+
+`wisp doctor` audits the daemon socket/service, user group permissions, local WireGuard
+tools, Pulumi CLI and backend login, provider credentials, session watchdog timers,
+active/orphaned session markers, and directory writability. Every check reported as
+`[fail]` or `[warn]` includes an actionable `hint:` line naming the exact command,
+environment variable, or path to resolve it.
+
 ## Daemon and socket
 
 ### `PermissionError` when the CLI/TUI talks to the daemon

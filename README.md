@@ -1,13 +1,15 @@
 <div align="center">
 
-```text
+<!-- ```text
 ██╗    ██╗██╗███████╗██████╗
 ██║    ██║██║██╔════╝██╔══██╗
 ██║ █╗ ██║██║███████╗██████╔╝
 ██║███╗██║██║╚════██║██╔═══╝
 ╚███╔███╔╝██║███████║██║
  ╚══╝╚══╝ ╚═╝╚══════╝╚═╝
-```
+``` -->
+
+# WISP
 
 **A VPN for the sessions you actually need.**
 
@@ -20,7 +22,7 @@ pay-as-you-go pricing.
 
 <img src="https://raw.githubusercontent.com/dosquisd/wisp-vpn/main/.github/assets/demo-tui.gif" alt="Wisp TUI — deploy, tunnel, destroy" width="100%">
 
-[![Python](https://img.shields.io/badge/python-3.14%2B-3776AB?logo=python&logoColor=white)](https://github.com/dosquisd/wisp-vpn/pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://github.com/dosquisd/wisp-vpn/pyproject.toml)
 [![License](https://img.shields.io/badge/license-MIT-10b981)]([LICENSE](https://github.com/dosquisd/wisp-vpn/tree/main/LICENSE))
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-64748b)](https://github.com/dosquisd/wisp-vpn/tree/main/docs/installation.md)
 [![Providers](https://img.shields.io/badge/providers-aws%20%7C%20oci%20%7C%20gcp%20%7C%20vps-f59e0b)](#supported-providers)
@@ -200,6 +202,7 @@ wisp destroy aws --region eu-west-1  # tears it all down
 | `wisp destroy <provider> [-r region]` | Tear down the tunnel + all cloud resources |
 | `wisp regions <provider>` | List available regions (JSON) |
 | `wisp gc [--refresh] [--destroy]` | Find and clean up leftover stacks |
+| `wisp doctor` | Check local prerequisites and system readiness |
 
 ## Supported providers
 

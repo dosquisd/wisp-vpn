@@ -11,6 +11,7 @@ wisp deploy     # CLI: deploy a VM
 wisp destroy    # CLI: destroy VMs
 wisp connect    # CLI: reconnect local client to an active tunnel
 wisp disconnect # CLI: panic switch to disconnect local client immediately
+wisp doctor     # CLI: check prerequisites and system health
 wisp regions    # CLI: list available regions
 wisp daemon     # CLI: install/uninstall the privileged local daemon
 ```
@@ -187,6 +188,63 @@ sleep cycle within the session's active TTL window.
 ```bash
 wisp connect
 # → WireGuard client connected.
+```
+
+### `wisp doctor [--log-level LEVEL]`
+
+Runs a comprehensive, read-only diagnostic check of every prerequisite Wisp
+depends on. It reports the status of each component and provides actionable hints
+for any warnings or failures.
+
+- **Read-only**: Never modifies files, creates directories, acquires locks, or
+  requires `sudo`/root privileges.
+- **Exit codes**:
+  - `0`: All checks passed (`[ok]`), issued non-blocking warnings (`[warn]`), or
+    were skipped (`[skip]`).
+  - `1`: At least one check failed (`[fail]`).
+- **Severity rule**: `[fail]` is reserved for machine-wide blockers — the daemon,
+  the WireGuard tools, or writable runtime directories. Anything that depends on
+  which provider you deploy to (Pulumi, per-provider credentials) is reported as
+  `[warn]` with an actionable hint, because one broken AWS key must not fail a
+  machine that deploys to OCI or to a Custom VPS.
+
+**Components checked:**
+
+1. **`daemon`**: Verifies the privileged daemon transport. On Linux, checks that
+   `/run/wisp.sock` exists as a socket and responds to status requests; on
+   Windows, verifies that `WispService` is installed and queryable before probing
+   the named pipe. A daemon with no tunnel up is healthy (`[ok]`); only an
+   unanswered probe fails. Warns if a tunnel conflict is detected on `wg0`.
+2. **`membership`**: Verifies user permissions to interact with the daemon. On
+   Linux, checks that the `wisp` group exists and the current session has active
+   membership (`os.getgroups` or primary GID); on Windows, verifies that the
+   process token possesses Administrator privileges (`S-1-5-32-544`).
+3. **`wireguard-tools`**: Verifies local CLI binaries (`wg` and `wg-quick` on
+   Linux; `wireguard.exe` on PATH or under `%ProgramFiles%\WireGuard` on
+   Windows).
+4. **`pulumi`**: Checks whether `pulumi` is on PATH and authenticated
+   (`pulumi whoami`). If not on PATH, inspects `~/.pulumi/bin/pulumi` and warns
+   with instructions to fix PATH. Missing or unauthenticated is a `[warn]`:
+   only the Pulumi-backed providers (AWS, OCI, GCP) need it.
+5. **`credentials-*`**: Checks configured cloud providers (`aws`, `oci`, `gcp`,
+   `vps`). Unconfigured providers are reported as `[skip]`. Configured providers
+   undergo bounded validation against their respective APIs (STS for AWS,
+   Identity API for OCI, Compute API for GCP; VPS validates local key files
+   without network calls). A rejected credential set is a `[warn]`, not a
+   failure: having several providers configured is normal and only the one you
+   deploy to matters.
+6. **`ttl-watchdog`**: Checks whether the local OS scheduler is available
+   (`systemd-run` on Linux, `schtasks` on Windows) when
+   `[general].max_session_ttl_minutes > 0`. Skipped if TTL is disabled.
+7. **`session-marker`**: Inspects `active-session.json`. Skipped if absent; reports
+   `[ok]` if resumable; warns with a ready-to-run `wisp destroy <provider> -r <region>`
+   hint if the session has expired or the owning process is dead (orphan).
+8. **`directories`**: Tests writability of runtime directories (`WISP_DATA_DIR`,
+   `WISP_CONFIG_DIR`, `WISP_LOG_DIR`, `WIREGUARD_KEYS_DIR`) by checking existing
+   paths or nearest existing ancestors using `os.access`. Never creates directories.
+
+```bash
+wisp doctor
 ```
 
 ## CLI vs TUI behaviour
