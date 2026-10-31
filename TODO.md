@@ -82,16 +82,23 @@ delegates to it; the legacy `setup.sh` was deleted).
 
 ## Watchdog improvements (survive the client machine being off)
 
-Today the TTL watchdog runs on the user's machine (`systemd-run --user` /
-`schtasks`): if the machine is off or suspended when the TTL expires, the VM
-keeps billing until the next `wisp gc`. README already documents the limit.
+Solved without cloud-side infrastructure: every deploy now installs an in-VM
+dead man's switch (idle handshake check + hard TTL) that terminates a cloud VM
+or tears down Wisp's own interface on a VPS even when the client machine is
+off, suspended, or destroyed. The local OS watchdog (`systemd-run --user` /
+`schtasks`) stays as the second layer, now with the environment and argv it
+needs to actually run.
 
-- [ ] Analyze cloud-side alternatives per provider (OCI scheduled events /
+- [X] Analyze cloud-side alternatives per provider (OCI scheduled events /
   Functions, GCP Cloud Scheduler + API trigger, AWS EventBridge) that
-  destroy the session server-side
-- [ ] Pros/cons: extra cloud permissions vs. the billing risk
-- [ ] Possibly make it the default for cloud providers, keeping the local
-  watchdog for VPS sessions
+  destroy the session server-side — rejected in favor of the in-VM watchdog,
+  which needs no extra cloud permissions and also covers a user-owned VPS
+- [X] Pros/cons: extra cloud permissions vs. the billing risk — resolved: the
+  in-VM switch needs zero new permissions, so the cloud-side path buys
+  nothing for the added surface
+- [X] Make it the default for cloud providers, keeping the local watchdog for
+  VPS sessions — the in-VM watchdog is installed on every deploy (cloud mode
+  powers off, VPS mode only removes Wisp's interface)
 
 ## GitHub Pages promo site
 
