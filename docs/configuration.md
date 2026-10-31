@@ -277,9 +277,11 @@ Bring-your-own-server: Wisp configures WireGuard on a Linux host you already
 own, over SSH. Nothing is provisioned — no Pulumi, no cloud API — and on
 cleanup Wisp tears down only the interface it created (named `wisp-<hex>`,
 never your own `wg0`): the tunnel is brought down (which also removes the
-firewall rules the installer added), the config file is deleted, and
-packages are kept. Authentication is public-key based; password
-authentication is not supported.
+firewall rules the installer added), the config file is deleted, and the
+packages Wisp installed are removed too — but only those a manifest records
+as missing before the install, and only while your server has no other
+WireGuard config. `iptables` and `resolvconf` are never removed.
+Authentication is public-key based; password authentication is not supported.
 
 | Field | Type | Default | Meaning |
 | ------- | ------ | --------- | --------- |

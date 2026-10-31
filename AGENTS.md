@@ -239,8 +239,12 @@ resolved per user via `platformdirs` (env overrides `WISP_DATA_DIR`,
   is in flight) → `stack.destroy()` → remove local artifacts (key + client
   conf). VPS destroy additionally tears the tunnel down on the SERVER: every
   `/etc/wireguard/wisp-*.conf` gets `wg-quick down` (which removes the
-  installer's iptables rules), `systemctl disable`, and deletion — packages
-  and non-wisp configs are never touched.
+  installer's iptables rules), `systemctl disable`, and deletion. A VPS
+  destroy then removes the packages Wisp installed, but only those a manifest
+  proves Wisp added (`/etc/wisp/installed-packages`, written after a
+  successful install from a pre-install probe) and only while no other
+  `*.conf` remains in `/etc/wireguard`; `iptables` and `resolvconf` are never
+  removed, and non-wisp configs are never touched.
 - **Session guard is armed BEFORE provisioning starts** (not on success): a
   TUI/console death mid-deploy leaves the active-session marker behind, and
   the signal handlers cancel the in-flight update and destroy partial

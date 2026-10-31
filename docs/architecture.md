@@ -126,8 +126,11 @@ User → TUI/CLI
   VPS provider: additionally SSHes in and disarms the in-VM watchdog (disables
   timer, deletes /etc/wisp/watchdog-<nic>.conf, cleans up units/script if last
   session), then tears down every /etc/wireguard/wisp-*.conf (wg-quick down +
-  disable + rm); packages and non-wisp configs are never touched. Then cancels
-  the local TTL watchdog and clears the marker.
+  disable + rm), then removes the packages recorded in
+  /etc/wisp/installed-packages (only those Wisp added, and only while no
+  other *.conf remains; iptables/resolvconf are never removed). Non-wisp
+  configs are never touched. Then cancels the local TTL watchdog and clears
+  the marker.
 ```
 
 ## Session lifecycle and watchdog layers

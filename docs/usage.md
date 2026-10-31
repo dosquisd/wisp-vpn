@@ -77,9 +77,10 @@ Prints the deployment result as JSON, e.g.:
 Disconnects the local client, destroys the Pulumi stack (cancelling any
 in-flight update first), and removes local artifacts (SSH key, client
 config). For `vps`, it also tears the tunnel down on the server: every
-`/etc/wireguard/wisp-*.conf` interface is brought down and deleted
-(packages and non-wisp configs are never touched). Prints the number of
-deleted resources:
+`/etc/wireguard/wisp-*.conf` interface is brought down and deleted, and the
+packages Wisp itself installed are removed (a server running its own tunnel
+keeps them, and `iptables`/`resolvconf` are never removed). Non-wisp configs
+are never touched. Prints the number of deleted resources:
 
 VPS connection details resolve in this order: `--host`/`--ssh-user`/
 `--ssh-port`/`--ssh-key-path` flags, then the deploy-time marker (what the

@@ -25,6 +25,10 @@ Configures the remote WireGuard server using Paramiko (SSH/SFTP):
    `ALLOWED_IPS`, `SERVER_WG_NIC`, `SERVER_WG_IPV4`, `SERVER_WG_IPV6`,
    `CLIENT_DNS_1`, `CLIENT_DNS_2`, `AUTO_INSTALL=y`, `CLIENT_NAME`,
    `CLIENT_WG_IPV4`, `CLIENT_WG_IPV6`, `SKIP_CLIENT_CREATION`.
+4. Before installing, probes which package manager the server has and which of
+   `wg`/`qrencode` are missing. After a successful install it writes those
+   package names, one per line, to `/etc/wisp/installed-packages` (mode
+   `0600`). The probe failing only disables cleanup — it never fails a deploy.
 4. Locates the generated client config (`wg0-client-*.conf`, with a fallback to
    the SSH user's home directory) and downloads it via SFTP to
    `WISP_DATA_DIR/wireguard-confs/wg0-client.conf` (creating the parent
@@ -77,9 +81,37 @@ Tears down every Wisp-created WireGuard interface on a remote server
    sessions exist on the server, removes `/etc/systemd/system/wisp-watchdog@.*`,
    `/usr/local/bin/wisp-watchdog`, reloads systemd, and removes `/etc/wisp`.
 Only `wisp-*` files are matched — a pre-existing `wg0.conf` or any other
-config is never touched, and packages are kept. Best effort per interface:
-a failed step for one config does not stop the rest. Returns `False` when
-the SSH connection or the listing fails.
+config is never touched, and packages are kept here. Best effort per
+interface: a failed step for one config does not stop the rest. Returns
+`False` when the SSH connection or the listing fails.
+
+### `remove_installed_packages(ssh_user, instance_ip, ssh_key_file="", on_progress=None) -> bool`
+
+Removes the WireGuard packages Wisp added to a server it does not own (used
+by the VPS provider's `delete_vm`, after `remove_wisp_server_configs`).
+
+1. Lists `/etc/wireguard/*.conf` excluding `wisp-*.conf`. If anything else is
+   there, the server has its own tunnel: packages are left alone.
+2. Reads `/etc/wisp/installed-packages` — the provenance manifest written by
+   `configure_remote_server` with only the packages that were missing before
+   the install. No manifest means Wisp never installed anything, so nothing is
+   removed.
+3. Keeps only names in `REMOVABLE_PACKAGES` (`wireguard`, `wireguard-tools`,
+   `qrencode`, `libqrencode-tools`). `iptables` and `resolvconf` are never
+   removed even when Wisp installed them, because the server may depend on
+   them for its own firewall or DNS.
+4. Detects the package manager on the server (`apt-get`, `dnf`, `yum`,
+   `pacman`, `apk`) and removes the packages with the matching command. The
+   manifest is deleted only after a successful removal, so a failure stays
+   retryable.
+
+Returns `True` when the step completed (including deliberate skips) and
+`False` when the SSH connection, the manifest read, or the removal failed.
+
+The in-VM watchdog does not call this: its script only estimates handshake age
+and tears the tunnel down, deliberately without running a package manager. A
+session an abandoned VPS watchdog ended therefore leaves the packages and the
+manifest behind, and a later `wisp deploy` on that server reuses them.
 
 ## `wireguard/local_client.py`
 

@@ -4,9 +4,10 @@ Unlike the cloud providers, nothing is provisioned here — no Pulumi, no
 cloud API. The user hands Wisp an already-running Linux host reachable over
 SSH, and Wisp does exactly what it does after any cloud deploy: install and
 configure the WireGuard server remotely, connect the local client, and tear
-everything down on demand. Packages are kept on destroy — the server may
-have been using WireGuard before Wisp — but the Wisp-created interface and
-its config are removed, so no tunnel is left behind.
+everything down on demand. Packages are removed only when Wisp installed them
+(a manifest records what was missing before the install) and only while no
+other WireGuard config remains on the server; the Wisp-created interface and
+its config are always removed, so no tunnel is left behind.
 
 Server-side interfaces are named ``wisp-<hex>`` (not ``wg0``) so a VPS that
 already runs its own WireGuard never collides with Wisp's config; destroy
@@ -44,6 +45,7 @@ from wisp.wireguard import (
 )
 from wisp.wireguard.remote_server import (
     configure_remote_server,
+    remove_installed_packages,
     remove_wisp_server_configs,
 )
 
@@ -257,6 +259,16 @@ class VPSProvider(BaseProvider):
         creds = self._credentials
         if creds.host:
             remove_wisp_server_configs(
+                ssh_user=creds.ssh_user,
+                instance_ip=creds.host,
+                ssh_key_file=creds.ssh_key_path,
+                on_progress=on_progress,
+            )
+            # Runs after the configs are gone: the function checks what is
+            # left in /etc/wireguard to decide whether the tooling is still
+            # in use. Best effort — a server left with packages is far better
+            # than a failed destroy that keeps a tunnel alive.
+            remove_installed_packages(
                 ssh_user=creds.ssh_user,
                 instance_ip=creds.host,
                 ssh_key_file=creds.ssh_key_path,

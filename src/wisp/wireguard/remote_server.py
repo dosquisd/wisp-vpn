@@ -17,6 +17,170 @@ from wisp.config.constants import (
 from wisp.schemas import InventoryContext
 from wisp.utils import logger
 
+#: Path of the provenance manifest written by a successful server install.
+INSTALLED_PACKAGES_PATH = "/etc/wisp/installed-packages"
+
+#: Packages a destroy may remove, and only when Wisp installed them.
+#:
+#: ``iptables`` and ``resolvconf`` are absent on purpose: the installer adds
+#: them on most distros, but a server may rely on them for its own firewall or
+#: DNS. "Wisp installed it once" is not evidence that nobody uses it now, and
+#: taking packet filtering away from a machine Wisp does not own is never a
+#: safe cleanup. ``libqrencode-tools`` is Alpine's name for ``qrencode``.
+REMOVABLE_PACKAGES = frozenset(
+    {"wireguard", "wireguard-tools", "qrencode", "libqrencode-tools"}
+)
+
+#: Package names per family for each tool the installer provides as a command.
+_PACKAGES_BY_FAMILY: dict[str, dict[str, tuple[str, ...]]] = {
+    "apt": {"wg": ("wireguard", "wireguard-tools"), "qrencode": ("qrencode",)},
+    "dnf": {"wg": ("wireguard-tools",), "qrencode": ("qrencode",)},
+    "yum": {"wg": ("wireguard-tools",), "qrencode": ("qrencode",)},
+    "pacman": {"wg": ("wireguard-tools",), "qrencode": ("qrencode",)},
+    "apk": {"wg": ("wireguard-tools",), "qrencode": ("libqrencode-tools",)},
+}
+
+#: Removal command per package family (mirrors ``scripts/uninstall.sh``).
+_REMOVAL_COMMANDS: dict[str, str] = {
+    "apt": "apt-get remove -y",
+    "dnf": "dnf remove -y",
+    "yum": "yum remove -y",
+    "pacman": "pacman -Rs --noconfirm",
+    "apk": "apk del",
+}
+
+
+def _privileged_prefix(ssh_user: str) -> str:
+    """Return the shell prefix needed to run a command as root.
+
+    Args:
+        ssh_user (str): Remote username.
+
+    Returns:
+        str: ``""`` when connected as root, otherwise ``"sudo -n "``.
+    """
+    return "" if ssh_user == "root" else "sudo -n "
+
+
+def _detect_package_family(ssh: paramiko.SSHClient, ssh_user: str) -> str:
+    """Detect which package manager can remove packages on the server.
+
+    Detection asks the server which managers exist instead of parsing
+    ``/etc/os-release``: the removal path only needs a command that works, and
+    containers or minimal images do not always match their distro defaults.
+
+    Args:
+        ssh (paramiko.SSHClient): Connected SSH client.
+        ssh_user (str): Remote username (root skips ``sudo``).
+
+    Returns:
+        str: ``"apt"``, ``"dnf"``, ``"yum"``, ``"pacman"``, ``"apk"``, or an
+        empty string when none was found.
+    """
+    prefix = _privileged_prefix(ssh_user)
+    status, stdout, _ = _run_remote(
+        ssh,
+        f"{prefix}sh -c 'for m in apt-get dnf yum pacman apk; do"
+        " command -v $m >/dev/null 2>&1 && { echo $m; break; }; done'",
+    )
+    if status != 0:
+        return ""
+    manager = stdout.strip()
+    return "apt" if manager == "apt-get" else manager
+
+
+def _missing_tool_commands(ssh: paramiko.SSHClient, ssh_user: str) -> list[str]:
+    """List the installer tool commands the server does not have yet.
+
+    The installer provides WireGuard through ``wg`` and prints client QR codes
+    through ``qrencode``. Probing the commands instead of the package names
+    covers the installer's per-distro choices (``wireguard-tools`` vs
+    ``wireguard``, ``qrencode`` vs ``libqrencode-tools``).
+
+    Args:
+        ssh (paramiko.SSHClient): Connected SSH client.
+        ssh_user (str): Remote username (root skips ``sudo``).
+
+    Returns:
+        list[str]: Command names that are missing, or an empty list when the
+        probe itself failed.
+    """
+    prefix = _privileged_prefix(ssh_user)
+    status, stdout, _ = _run_remote(
+        ssh,
+        f"{prefix}sh -c 'for t in wg qrencode; do"
+        " command -v $t >/dev/null 2>&1 || echo $t; done'",
+    )
+    if status != 0:
+        return []
+    return [line.strip() for line in stdout.splitlines() if line.strip()]
+
+
+def _packages_to_install(ssh: paramiko.SSHClient, ssh_user: str) -> tuple[str, ...]:
+    """Work out which packages a successful install is about to add.
+
+    Runs before the installer, so a later destroy has provenance instead of a
+    guess: only packages that were missing are reported.
+
+    Args:
+        ssh (paramiko.SSHClient): Connected SSH client.
+        ssh_user (str): Remote username (root skips ``sudo``).
+
+    Returns:
+        tuple[str, ...]: Package names for the detected family, deduplicated and
+        in install order. Empty when the family is unknown or every tool is
+        already present.
+    """
+    family = _detect_package_family(ssh, ssh_user)
+    if not family:
+        logger.debug("Package family not detected; package provenance disabled")
+        return ()
+
+    packages: list[str] = []
+    for tool in _missing_tool_commands(ssh, ssh_user):
+        packages.extend(_PACKAGES_BY_FAMILY.get(family, {}).get(tool, ()))
+    return tuple(dict.fromkeys(packages))
+
+
+def _write_installed_packages(
+    ssh: paramiko.SSHClient, ssh_user: str, packages: tuple[str, ...]
+) -> bool:
+    """Record the packages Wisp installed in :data:`INSTALLED_PACKAGES_PATH`.
+
+    The manifest is the destroy path's provenance. It is written only after a
+    successful install and only with packages that were missing beforehand, so
+    removing them cannot take away tooling the server already had.
+
+    Args:
+        ssh (paramiko.SSHClient): Connected SSH client.
+        ssh_user (str): Remote username (root skips ``sudo``).
+        packages (tuple[str, ...]): Package names to record.
+
+    Returns:
+        bool: True when the manifest was written (or there was nothing to
+        record); False when the write failed.
+    """
+    if not packages:
+        return True
+
+    prefix = _privileged_prefix(ssh_user)
+    listed = " ".join(packages)
+    command = (
+        f"{prefix}sh -c 'mkdir -p /etc/wisp"
+        f' && printf "%s\\n" {listed} > {INSTALLED_PACKAGES_PATH}'
+        f" && chmod 600 {INSTALLED_PACKAGES_PATH}'"
+    )
+    status, _, err = _run_remote(ssh, command)
+    if status != 0:
+        logger.warning(
+            "Could not record the installed packages on the server: "
+            f"{err.strip() or 'unknown error'}"
+        )
+        return False
+
+    logger.debug(f"Recorded Wisp-installed packages: {', '.join(packages)}")
+    return True
+
 
 def _connect_ssh(
     ssh_user: str, instance_ip: str, ssh_key_file: str
@@ -108,9 +272,10 @@ def remove_wisp_server_configs(
     interface is brought down first: ``wg-quick down`` runs the config's
     ``PostDown`` rules, which removes the iptables/firewall rules the
     installer added. The generated client configs (which contain the
-    client's private key) are removed from the server too. Packages are
-    intentionally kept — the server may have been using WireGuard before
-    Wisp.
+    client's private key) are removed from the server too. Packages are not
+    touched here — the server may have been using WireGuard before Wisp;
+    :func:`remove_installed_packages` removes only the ones a manifest proves
+    Wisp introduced, and only when no other config remains.
 
     Everything runs through ``sudo -n`` unless connecting as root:
     ``/etc/wireguard`` is root-only on many distros, so an unprivileged
@@ -231,6 +396,148 @@ def remove_wisp_server_configs(
         else:
             _report("No Wisp interfaces found on the server.", 0.9)
         return True
+    finally:
+        ssh.close()
+        logger.debug("SSH connection closed")
+
+
+def remove_installed_packages(
+    ssh_user: str,
+    instance_ip: str,
+    ssh_key_file: str = "",
+    on_progress: Callable[[str, float | None], None] | None = None,
+) -> bool:
+    """Remove the packages Wisp installed on a server the user already owned.
+
+    Custom VPS deployments install WireGuard tooling on a machine that keeps
+    existing after the session. :func:`configure_remote_server` records the
+    packages that were missing before installing in
+    :data:`INSTALLED_PACKAGES_PATH`, so this removes exactly what Wisp
+    introduced and leaves tooling the server already had.
+
+    Only packages in :data:`REMOVABLE_PACKAGES` are removed. ``iptables`` and
+    ``resolvconf`` are never touched even when Wisp installed them: a server
+    may depend on them for its own firewall or DNS, and Wisp does not own it.
+
+    Removal is skipped entirely when another config remains in
+    ``/etc/wireguard`` after the Wisp ones were deleted. That means the user
+    set up their own tunnel on that server, so the tooling now serves
+    something beyond Wisp — the same ownership rule the tunnel teardown uses.
+
+    Everything runs through ``sudo -n`` unless connecting as root; ``-n``
+    fails fast instead of hanging when a password would be required.
+
+    Args:
+        ssh_user (str): User to connect as (needs sudo/root).
+        instance_ip (str): Server hostname or IP.
+        ssh_key_file (str): Path to the user's private key, or ``""`` for
+            agent/default-key authentication.
+        on_progress (Callable[[str, float | None], None] | None): Optional
+            progress callback.
+
+    Returns:
+        bool: True when the cleanup ran, including the deliberate skips (no
+        manifest, foreign config present, unknown package manager). False when
+        the SSH connection, the removal, or the manifest read failed.
+    """
+
+    def _report(message: str, progress: float | None = None) -> None:
+        if on_progress is not None:
+            on_progress(message, progress)
+
+    prefix = _privileged_prefix(ssh_user)
+    _report("Checking WireGuard packages on the server...")
+    try:
+        ssh = _connect_ssh(ssh_user, instance_ip, ssh_key_file)
+    except Exception as exc:
+        logger.warning(f"Could not SSH to {instance_ip} for package cleanup: {exc}")
+        _report(f"Package cleanup skipped (SSH failed): {exc}", 1.0)
+        return False
+
+    try:
+        # A config Wisp does not own means its WireGuard tooling is in use
+        # beyond this session. Match the same ``wisp-*.conf`` ownership rule
+        # the teardown uses, so only Wisp's own files are excluded.
+        _, listing, _ = _run_remote(
+            ssh,
+            f"{prefix}sh -c 'ls /etc/wireguard/*.conf 2>/dev/null"
+            " | grep -v '/wisp-[^/]*\\.conf$' || true'",
+        )
+        foreign = [line.strip() for line in listing.splitlines() if line.strip()]
+        if foreign:
+            logger.info(
+                f"Keeping WireGuard packages on {instance_ip}: the server has "
+                f"its own config ({foreign[0]})"
+            )
+            _report("Keeping WireGuard packages: the server has its own tunnel.", 1.0)
+            return True
+
+        status, manifest, err = _run_remote(
+            ssh, f"{prefix}cat {INSTALLED_PACKAGES_PATH} 2>/dev/null"
+        )
+        if status != 0:
+            logger.warning(
+                f"Could not read {INSTALLED_PACKAGES_PATH} on {instance_ip}: "
+                f"{err.strip() or 'unknown error'}"
+            )
+            _report("Package cleanup skipped (could not read the manifest).", 1.0)
+            return False
+        if not manifest.strip():
+            _report("No Wisp-installed packages recorded; nothing to remove.", 1.0)
+            return True
+
+        recorded = [line.strip() for line in manifest.splitlines() if line.strip()]
+        removable = [name for name in recorded if name in REMOVABLE_PACKAGES]
+        kept = [name for name in recorded if name not in REMOVABLE_PACKAGES]
+        if kept:
+            logger.info(
+                f"Leaving {', '.join(kept)} installed on {instance_ip}: the "
+                "installer adds them, but they may serve the server itself"
+            )
+        if not removable:
+            _report("Nothing to remove: recorded packages are kept by design.", 1.0)
+            return True
+
+        family = _detect_package_family(ssh, ssh_user)
+        removal = _REMOVAL_COMMANDS.get(family)
+        if removal is None:
+            logger.warning(
+                f"Could not detect a package manager on {instance_ip}; leaving "
+                f"{', '.join(removable)} installed"
+            )
+            _report("Packages left installed (unknown package manager).", 1.0)
+            return True
+
+        _report(f"Removing packages Wisp installed ({', '.join(removable)})...", 0.5)
+        status, _, err = _run_remote(ssh, f"{prefix}{removal} {' '.join(removable)}")
+        if status != 0:
+            # Keep the manifest so a later destroy can retry.
+            logger.warning(
+                f"Removing packages on {instance_ip} failed: "
+                f"{err.strip() or 'unknown error'}"
+            )
+            _report(
+                f"Package removal failed: {err.strip() or 'see the server log'}",
+                1.0,
+            )
+            return False
+
+        _run_remote(
+            ssh,
+            f"{prefix}sh -c 'rm -f {INSTALLED_PACKAGES_PATH};"
+            " rmdir /etc/wisp 2>/dev/null || true'",
+        )
+        logger.info(
+            f"Removed Wisp-installed packages on {instance_ip}: {', '.join(removable)}"
+        )
+        _report(f"Removed {len(removable)} package(s) Wisp installed.", 1.0)
+        return True
+    except Exception as exc:
+        # Best effort by contract: a cleanup problem must never turn a
+        # successful tunnel teardown into a failed destroy.
+        logger.warning(f"Package cleanup on {instance_ip} failed: {exc}")
+        _report(f"Package cleanup skipped: {exc}", 1.0)
+        return False
     finally:
         ssh.close()
         logger.debug("SSH connection closed")
@@ -527,6 +834,15 @@ def configure_remote_server(
     ssh = _connect_ssh(ssh_user, instance_ip, str(ssh_key_file) if ssh_key_file else "")
     _report("Connected to server over SSH.")
 
+    # Provenance for the destroy path: record what this install adds *before*
+    # it runs, so a later teardown removes only Wisp's own packages. A probe
+    # failure must never block the deploy — it only disables cleanup.
+    try:
+        wisp_installed_packages = _packages_to_install(ssh, ssh_user)
+    except Exception as exc:
+        logger.warning(f"Could not probe existing packages on {instance_ip}: {exc}")
+        wisp_installed_packages = ()
+
     try:
         # Upload the install script via SFTP
         _report("Uploading WireGuard installer to the server...")
@@ -608,6 +924,10 @@ def configure_remote_server(
             )
 
         logger.info("WireGuard server installation completed successfully")
+
+        # Only now are the probed packages actually on disk. Best effort:
+        # without a manifest a destroy simply leaves them installed.
+        _write_installed_packages(ssh, ssh_user, wisp_installed_packages)
 
         # Verify the interface actually came up: the installer only warns
         # when wg-quick fails to start, and reporting a dead tunnel as a

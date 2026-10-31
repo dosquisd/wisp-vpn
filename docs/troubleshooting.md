@@ -152,8 +152,32 @@ Work the layers in order — each one was a real failure during development:
 ### "Deleting" a VPS session does not delete a VM
 
 Correct — a Custom VPS is your server. The destroy tears the tunnel down on
-both ends and removes Wisp's own configs; the machine, packages, and any
-non-Wisp WireGuard config stay untouched.
+both ends and removes Wisp's own configs; the machine and any non-Wisp
+WireGuard config stay untouched. It also removes the packages Wisp installed,
+but only when it can prove it added them: a deploy from before that manifest
+existed, a server that already had WireGuard, or a server with its own tunnel
+still using the tooling all keep the packages. `iptables` and `resolvconf` are
+never removed in any case.
+
+### Destroy left WireGuard packages installed on a VPS
+
+That is the safe outcome, and one of these is why:
+
+- `/etc/wisp/installed-packages` is missing: the deploy predates provenance
+  tracking (or the probe could not read it), so Wisp cannot tell what it added.
+  Removing packages by guessing is not acceptable on a server Wisp does not
+  own.
+- Another `*.conf` remains in `/etc/wireguard` after Wisp's own configs were
+  deleted: you set up your own tunnel on that server, so its tooling is now in
+  use beyond Wisp.
+- The manifest recorded `iptables`/`resolvconf`: those are kept on purpose.
+- The session was torn down by the in-VM watchdog inside the server rather than
+  by `wisp destroy`: that script never runs a package manager, so the packages
+  and the manifest stay behind (a later deploy reuses them).
+
+To remove the packages yourself, use your distro's package manager
+(`apt-get remove wireguard wireguard-tools qrencode`, `dnf remove
+wireguard-tools qrencode`, and so on).
 
 ## "The TUI shows an orphaned session but the tunnel is clearly up"
 

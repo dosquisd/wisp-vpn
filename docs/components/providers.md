@@ -210,8 +210,11 @@ deliberately out of scope.
 - `delete_vm(...)` — tears the tunnel down on BOTH ends:
   `remove_wisp_server_configs()` SSHes in and for every
   `/etc/wireguard/wisp-*.conf` runs `wg-quick down` (which also removes the
-  installer's iptables rules), disables the unit, and deletes the config;
-  packages and non-wisp configs (e.g. the user's own `wg0`) are never
-  touched. Then disconnects the local client and removes the downloaded
+  installer's iptables rules), disables the unit, and deletes the config.
+  Then `remove_installed_packages()` removes the packages recorded in
+  `/etc/wisp/installed-packages` — only those Wisp added, and only while no
+  other `*.conf` remains in `/etc/wireguard` (a server running its own tunnel
+  keeps its tooling). `iptables`/`resolvconf` and non-wisp configs are never
+  touched. Finally it disconnects the local client and removes the downloaded
   client config. The user's SSH key is never generated or deleted.
 - `_provider_name` — `"Custom VPS"`.
