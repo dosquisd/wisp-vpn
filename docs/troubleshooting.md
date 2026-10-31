@@ -208,6 +208,39 @@ command to run after changing daemon-side code.
 - After `gc --destroy`, the local SSH key and client conf of the destroyed
   sessions are removed too.
 
+## The TTL watchdog fired but the VM is still running
+
+The local TTL watchdog is an OS-level one-shot (`systemd-run --user` on Linux,
+`schtasks` on Windows). It runs `wisp destroy <provider> -r <region>` outside
+Wisp, with no terminal attached, so a failure leaves no visible trace beyond its
+own unit:
+
+```console
+$ journalctl --user -u wisp-ttl-gcp-us-central1.service
+... wisp[92818]: Destroy failed:
+... wisp[92818]: [Errno 2] No such file or directory: 'pulumi'
+```
+
+The destroy flow disconnects the local client **before** touching the cloud, so
+a failure here means the tunnel is down while the VM is still billing. Destroy
+it from your shell (`wisp destroy <provider> -r <region>`) and check for other
+leftovers with `wisp gc`.
+
+Two causes have been hit in practice, both fixed:
+
+- **The scheduled command must be a valid CLI invocation.** `destroy` takes the
+  region through `-r/--region`; a positional region makes argparse exit with
+  status 2.
+- **The scheduled process does not inherit your shell environment.** A systemd
+  user unit runs with the *user manager* environment, where `~/.pulumi/bin` is
+  usually absent (the Pulumi installer only adds it to your shell rc). Wisp now
+  forwards `PATH` and the `PULUMI_*` variables into the unit with
+  `--setenv`. On Windows, `schtasks` inherits the registry `PATH`, which is why
+  `setup.ps1` installs Pulumi through `winget`.
+
+If a destroy keeps failing, run the printed command by hand to see the full
+output.
+
 ## "Another Wisp operation is in progress"
 
 Pulumi locks a stack while an update is running, so a deploy or destroy that

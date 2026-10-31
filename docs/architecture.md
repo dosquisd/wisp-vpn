@@ -160,7 +160,7 @@ abandoned resources with two cooperating watchdog layers:
 2. **Local watchdog (secondary)**:
    An OS-level one-shot scheduled on the user's machine (`systemd-run --user` on Linux,
    `schtasks` on Windows) via `utils/watchdog.py`. When `max_session_ttl_minutes > 0`, it
-   executes `wisp destroy <provider> <region>` locally upon TTL expiration.
+   executes `wisp destroy <provider> -r <region>` locally upon TTL expiration.
 
 ### Client network resilience and recovery
 

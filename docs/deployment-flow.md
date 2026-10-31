@@ -168,7 +168,7 @@ Every trigger funnels into that same guard, and the first one to fire wins:
 | `SIGINT` | Explicit `kill -INT` or shell job control -> guard |
 | Interpreter exit | `atexit` hook (all platforms) |
 | Previous run died | `find_orphaned_session` warns on next startup |
-| Local TTL expired | OS-level watchdog (`utils/watchdog.py`) runs `wisp destroy <provider> <region>` locally — works even if Wisp exits |
+| Local TTL expired | OS-level watchdog (`utils/watchdog.py`) runs `wisp destroy <provider> -r <region>` locally — works even if Wisp exits |
 | In-VM hard TTL reached | Autonomous remote timer (`wisp-watchdog@<nic>.timer`) -> `DEADLINE_EPOCH` reached -> `poweroff` (Cloud) or interface cleanup (VPS) |
 | In-VM idle timeout | Autonomous remote timer -> no WireGuard handshake for 900s -> `poweroff` (Cloud) or interface cleanup (VPS) |
 
@@ -230,7 +230,7 @@ is reliably torn down even if the client disappears:
 2. **Local OS-level watchdog (secondary)**:
    When `[general].max_session_ttl_minutes > 0` (default `60`), deploying schedules an
    OS-level one-shot on the user's workstation (`systemd-run --user` transient unit on Linux,
-   `schtasks` on Windows) which runs `wisp destroy <provider> <region>` when the TTL expires.
+   `schtasks` on Windows) which runs `wisp destroy <provider> -r <region>` when the TTL expires.
    Manual teardown cancels it. The deploy screen can toggle it per deployment and the CLI
    overrides it with `--ttl`; `0` keeps it off.
 

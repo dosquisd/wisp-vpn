@@ -99,7 +99,7 @@ infrastructure:
 2. **Local watchdog (local user)**:
    The optional local watchdog (`[general].max_session_ttl_minutes`, default `60`)
    schedules an OS-level one-shot (`systemd-run --user` on Linux, `schtasks` on
-   Windows) that runs `wisp destroy <provider> <region>` when the TTL expires.
+   Windows) that runs `wisp destroy <provider> -r <region>` when the TTL expires.
    The command runs under your local user account with your cloud credentials and the
    same permission model as a manual destroy — it is exactly `wisp destroy`, not
    a privileged background service. Scheduling is idempotent and manual teardown

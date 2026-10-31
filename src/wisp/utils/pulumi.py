@@ -1,3 +1,5 @@
+import os
+
 from pulumi import automation as auto
 
 from wisp.config.constants import PULUMI_PROJECT_NAME, get_pulumi_stack_name
@@ -154,6 +156,18 @@ def describe_pulumi_error(exc: Exception) -> str:
             "locked it for that update.\n"
             "Wait for it to finish (a scheduled `wisp destroy` is the usual "
             "cause) and try again."
+        )
+
+    if isinstance(exc, FileNotFoundError):
+        # The Pulumi CLI is resolved through PATH, so anything that runs Wisp
+        # outside the shell that installed it (a systemd user unit, a Windows
+        # scheduled task) fails here - typically *after* the local client was
+        # already disconnected, which makes it look like a partial destroy.
+        return (
+            f"The Pulumi CLI could not be found ({exc}).\n"
+            f"PATH was: {os.environ.get('PATH', '<unset>')}\n"
+            "Wisp runs `wisp destroy` through the OS scheduler, which resolves "
+            "`pulumi` from the PATH that armed the timer, not from your shell."
         )
 
     command_result = getattr(exc, "command_result", None)

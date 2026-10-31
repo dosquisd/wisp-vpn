@@ -266,7 +266,7 @@ resolved per user via `platformdirs` (env overrides `WISP_DATA_DIR`,
   - **Local layer (secondary)** (`src/wisp/utils/watchdog.py`, optional): when
     `[general].max_session_ttl_minutes > 0` (default 60), deploying schedules
     an OS-level one-shot (`systemd-run --user` on Linux, `schtasks` on
-    Windows) that runs `wisp destroy <provider> <region>` on the local machine.
+    Windows) that runs `wisp destroy <provider> -r <region>` on the local machine.
     Teardown and `wisp destroy` cancel it. The deploy screen toggles it per run
     (`--ttl` on the CLI).
   - **Keepalive**: `PersistentKeepalive = 25` is automatically added to client

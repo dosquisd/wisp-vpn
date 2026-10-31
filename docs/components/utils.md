@@ -66,7 +66,7 @@ locks a stack during an update, so Wisp keeps no lock of its own.
 ## `utils/watchdog.py`
 
 Session TTL watchdog (local layer): schedules an OS-level one-shot that runs
-`wisp destroy <provider> <region>` when the session TTL expires, so a
+`wisp destroy <provider> -r <region>` when the session TTL expires, so a
 forgotten session cannot keep a billable VM running after Wisp exits. This
 serves as the **second (local) watchdog layer**, complementing the primary
 in-VM watchdog (`/usr/local/bin/wisp-watchdog`) that runs autonomously inside
@@ -77,7 +77,24 @@ the remote server.
   never raised). Idempotent: cancels any pending timer for the same target
   first (re-arming the session guard schedules the same name again).
 - `cancel_ttl_watchdog(provider, region)` — cancels the timer (best effort,
-  safe when nothing was scheduled or it already fired).
+  safe when nothing was scheduled or it already fired). On Linux only the
+  `.timer` unit is stopped, never the `.service`: the service exists solely
+  while it runs, and the watchdog's own `wisp destroy` is that service, so
+  stopping it would SIGTERM the teardown halfway through. `reset-failed` then
+  unloads both dead units so `systemd-run` can reuse the name.
+- `_wisp_destroy_argv(provider, region)` — the single source of truth for the
+  scheduled invocation: `destroy <provider> -r <region>`. `destroy` takes the
+  region through `-r/--region` only, so a positional region makes argparse
+  exit 2 and the timer dies silently inside a transient unit.
+- `_watchdog_env(environ=None) -> dict[str, str]` — the environment handed to
+  the unit: `PATH` plus `PULUMI_HOME`, `PULUMI_BACKEND_URL` and
+  `PULUMI_CONFIG_PASSPHRASE` when set. A transient unit runs with the *user
+  manager* environment, not the shell that armed it, so the `PATH` the deploy
+  used is missing — on a stock Fedora install `pulumi` lives in
+  `~/.pulumi/bin` and only the shell rc adds it. Without this the scheduled
+  `wisp destroy` disconnects the client and then fails to find `pulumi`.
+  Windows has no per-task environment: `schtasks` tasks inherit the registry
+  `PATH`, which is why `setup.ps1` installs Pulumi through `winget`.
 - `get_watchdog_task_name(provider, region) -> str` — deterministic name
   (`wisp-ttl-<provider>-<region>`) so any process can cancel the same timer.
 - `watchdog_available() -> bool` — whether the platform scheduler binary is
