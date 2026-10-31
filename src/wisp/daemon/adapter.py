@@ -4,6 +4,14 @@ from pathlib import Path
 
 from wisp.utils import PlatformEnum, logger, secure_file
 
+#: First line written into every client config Wisp installs.
+#:
+#: Ownership is decided by this marker, never by the path: ``wg0`` is also the
+#: default name a user's own WireGuard setup uses, and ``wg-quick`` writes it to
+#: the same ``/etc/wireguard/wg0.conf``. Overwriting that file would destroy an
+#: unrelated VPN, so the daemon must be able to prove the file is its own.
+MANAGED_HEADER = "# Managed by wisp"
+
 
 class BaseAdapter(ABC):
     WG_CONF_PATH: Path
@@ -48,6 +56,96 @@ class BaseAdapter(ABC):
         """
         return None
 
+    @property
+    def tunnel_name(self) -> str:
+        """Return the interface (Linux) or tunnel-service (Windows) name managed."""
+        return self.WG_CONF_PATH.stem
+
+    def is_managed(self) -> bool:
+        """Return True when the config on disk was written by Wisp.
+
+        The marker is checked instead of the path because other WireGuard
+        setups use the same ``wg0`` name and the same directory. A missing or
+        unreadable file is not ours by definition.
+
+        Returns:
+            bool: True only when the first non-empty line is the ownership
+            marker.
+        """
+        try:
+            content = self.WG_CONF_PATH.read_text(errors="replace")
+        except OSError:
+            return False
+        return _has_ownership_header(content)
+
+    def interface_present(self) -> bool:
+        """Return True when the tunnel currently exists on this machine.
+
+        Returns:
+            bool: True when the platform status query succeeds, False when it
+            fails or cannot be run.
+        """
+        try:
+            return self.status().returncode == 0
+        except Exception:
+            return False
+
+    def foreign_tunnel_reason(self) -> str | None:
+        """Explain why the tunnel name cannot be used, or None when it is free.
+
+        Used before any destructive operation. A tunnel is foreign when a
+        config with the target name exists without the ownership marker, or
+        when the name is live on the machine while the on-disk config is not
+        ours - both mean someone else's VPN owns it.
+
+        Returns:
+            str | None: A user-facing explanation when the tunnel belongs to
+            something else, or None when Wisp may proceed.
+        """
+        if self.is_managed():
+            return None
+        if not self.WG_CONF_PATH.exists() and not self.interface_present():
+            return None
+
+        return (
+            f"WireGuard tunnel '{self.tunnel_name}' already exists and was not "
+            f"created by Wisp. Refusing to modify {self.WG_CONF_PATH}, because "
+            "overwriting it would destroy another WireGuard configuration. Bring "
+            "that tunnel down (or move its config aside if it is a leftover) and "
+            "retry."
+        )
+
+
+def _has_ownership_header(content: str) -> bool:
+    """Return True when ``content`` starts with Wisp's ownership marker.
+
+    Args:
+        content (str): Candidate WireGuard configuration.
+
+    Returns:
+        bool: True when the first non-empty line is :data:`MANAGED_HEADER`.
+    """
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped == MANAGED_HEADER
+    return False
+
+
+def with_ownership_header(config_content: str) -> str:
+    """Return ``config_content`` prefixed with the ownership marker.
+
+    ``wg-quick`` ignores ``#`` lines, so the marker is inert for WireGuard and
+    is what lets a later run prove the file is Wisp's before overwriting it.
+
+    Args:
+        config_content (str): Validated WireGuard client configuration.
+
+    Returns:
+        str: The configuration with :data:`MANAGED_HEADER` as its first line.
+    """
+    return f"{MANAGED_HEADER}\n{config_content}"
+
 
 def _parse_latest_handshakes(output: str) -> int | None:
     """Parse the output of ``wg show <iface> latest-handshakes``.
@@ -86,18 +184,24 @@ class LinuxAdapter(BaseAdapter):
         self.WG_CONF_PATH.write_text(config_content)
         self.WG_CONF_PATH.chmod(0o600)
 
-        # Best-effort: bring down any leftover interface before starting fresh.
-        subprocess.run(["wg-quick", "down", "wg0"], capture_output=True, text=True)
+        # Best-effort: bring down any leftover tunnel of ours before starting
+        # fresh. Callers refuse to get here when someone else owns the name, so
+        # this can only drop a tunnel Wisp created.
+        subprocess.run(
+            ["wg-quick", "down", self.tunnel_name], capture_output=True, text=True
+        )
 
-        return self._run(["wg-quick", "up", "wg0"])
+        return self._run(["wg-quick", "up", self.tunnel_name])
 
     def disconnect(self) -> subprocess.CompletedProcess:
         """Disconnect the local tunnel."""
-        return self._run(["wg-quick", "down", "wg0"])
+        return self._run(["wg-quick", "down", self.tunnel_name])
 
     def status(self) -> subprocess.CompletedProcess:
         """Return the status of the local tunnel."""
-        return subprocess.run(["wg", "show", "wg0"], capture_output=True, text=True)
+        return subprocess.run(
+            ["wg", "show", self.tunnel_name], capture_output=True, text=True
+        )
 
     def latest_handshake_epoch(self) -> int | None:
         """Return the newest handshake epoch timestamp across all peers.
@@ -127,10 +231,6 @@ class WindowsAdapter(BaseAdapter):
     WG_CONF_PATH: Path = Path("/ProgramData/wisp/wireguard/wg0.conf")
 
     __type: PlatformEnum = PlatformEnum.WINDOWS
-
-    @property
-    def tunnel_name(self) -> str:
-        return self.WG_CONF_PATH.stem
 
     @property
     def tunnel_service(self) -> str:

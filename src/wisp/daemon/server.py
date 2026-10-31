@@ -10,7 +10,7 @@ import asyncio
 import subprocess
 import time
 
-from wisp.daemon.adapter import BaseAdapter
+from wisp.daemon.adapter import BaseAdapter, with_ownership_header
 from wisp.daemon.protocol import ActionEnum, Request, Response
 from wisp.daemon.transport import BaseTransport, get_transport
 from wisp.utils.logger import logger
@@ -41,12 +41,36 @@ def validate_client_config(content: str) -> None:
             raise ValueError(f"Directive not allowed in client config: {key}")
 
 
+def refuse_foreign_tunnel(adapter: BaseAdapter) -> Response | None:
+    """Refuse to touch a tunnel that Wisp did not create.
+
+    ``wg0`` is the default name for every WireGuard setup, and ``wg-quick``
+    keeps its config at the same path Wisp uses. Connecting over it would
+    overwrite someone else's VPN config (and ``wg-quick down`` would kill their
+    tunnel first), so the daemon checks ownership before any destructive
+    operation and refuses instead of guessing.
+
+    Args:
+        adapter (BaseAdapter): The platform adapter to inspect.
+
+    Returns:
+        Response | None: A rejection response when the tunnel is foreign, or
+        None when Wisp may proceed.
+    """
+    reason = adapter.foreign_tunnel_reason()
+    if reason is None:
+        return None
+    logger.warning(f"Refusing to operate on a foreign tunnel: {reason}")
+    return Response(ok=False, message=reason)
+
+
 async def handle_connect(config_content: str, adapter: BaseAdapter) -> Response:
-    """Write the WireGuard config and bring the ``wg0`` interface up.
+    """Write the WireGuard config and bring the tunnel up.
 
     Validates ``config_content`` first (rejecting script-hook directives that
-    ``wg-quick`` runs as root), then writes it to :data:`WG_CONF_PATH` with
-    mode ``0600`` and runs ``wg-quick up wg0``.
+    ``wg-quick`` runs as root), refuses to touch a tunnel owned by another
+    WireGuard setup, then writes the config with Wisp's ownership marker and
+    brings the interface up.
 
     Args:
         config_content (str): The full WireGuard client configuration.
@@ -61,15 +85,29 @@ async def handle_connect(config_content: str, adapter: BaseAdapter) -> Response:
     except ValueError as e:
         logger.warning(f"Rejected client config: {e}")
         return Response(ok=False, message=str(e))
+    refusal = refuse_foreign_tunnel(adapter)
+    if refusal is not None:
+        return refusal
     try:
-        adapter.connect(config_content)
+        adapter.connect(with_ownership_header(config_content))
         return Response(ok=True, message="connected")
     except subprocess.CalledProcessError as e:
         return Response(ok=False, message=e.stderr or str(e))
 
 
 async def handle_disconnect(adapter: BaseAdapter) -> Response:
-    """Bring the ``wg0`` interface down via ``wg-quick down wg0``."""
+    """Bring Wisp's tunnel down, leaving a foreign one alone.
+
+    Args:
+        adapter (BaseAdapter): The platform-specific adapter to use.
+
+    Returns:
+        Response: ``ok=True`` on success, otherwise the reason nothing was
+        disconnected.
+    """
+    refusal = refuse_foreign_tunnel(adapter)
+    if refusal is not None:
+        return refusal
     try:
         adapter.disconnect()
         return Response(ok=True, message="disconnected")
@@ -78,9 +116,27 @@ async def handle_disconnect(adapter: BaseAdapter) -> Response:
 
 
 async def handle_status(adapter: BaseAdapter) -> Response:
-    """Return the output of ``wg show wg0`` (``ok`` reflects the exit code)."""
+    """Return the tunnel status, its handshake age and any ownership conflict.
+
+    A handshake age is only reported for a tunnel Wisp owns: attributing some
+    other VPN's handshakes to a Wisp session would make the TUI adopt, report
+    or heal the wrong tunnel. ``tunnel_conflict`` is reported regardless, so a
+    caller can refuse a deployment before spending money on one.
+
+    Args:
+        adapter (BaseAdapter): The platform-specific adapter to use.
+
+    Returns:
+        Response: ``ok`` reflects the platform status exit code.
+    """
     result = adapter.status()
-    resp = Response(ok=result.returncode == 0, message=result.stdout)
+    resp = Response(
+        ok=result.returncode == 0,
+        message=result.stdout,
+        tunnel_conflict=adapter.foreign_tunnel_reason(),
+    )
+    if not adapter.is_managed():
+        return resp
     try:
         age = adapter.latest_handshake_epoch()
         if age is not None and age > 0:
@@ -134,6 +190,11 @@ async def reset_stale_tunnel(adapter: BaseAdapter, now: float | None = None) -> 
     session configured with ``PersistentKeepalive = 25`` continuously maintains
     a fresh handshake.
 
+    Only a tunnel Wisp owns is ever torn down. ``wg0`` is also the default name
+    of a user's own WireGuard setup, and dropping that would break a VPN Wisp
+    never created - a reboot leaving it alone is far better than a root daemon
+    killing someone else's tunnel.
+
     Args:
         adapter (BaseAdapter): The platform-specific adapter controlling the tunnel.
         now (float | None): Current unix timestamp, or None to use ``time.time()``.
@@ -141,6 +202,10 @@ async def reset_stale_tunnel(adapter: BaseAdapter, now: float | None = None) -> 
     Returns:
         bool: True if a stale tunnel was found and torn down, False otherwise.
     """
+    if not adapter.is_managed():
+        logger.debug("Local tunnel is not managed by Wisp; leaving it alone")
+        return False
+
     handshake = adapter.latest_handshake_epoch()
     if handshake is None:
         return False

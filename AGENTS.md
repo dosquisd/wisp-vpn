@@ -190,6 +190,20 @@ resolved per user via `platformdirs` (env overrides `WISP_DATA_DIR`,
 - **Daemon transport**: Unix socket `/run/wisp.sock` (Linux, systemd socket
   activation via fd 3) or Named Pipe `\\.\pipe\wisp` (Windows). Selected by
   `daemon.transport.get_transport()`.
+- **Wisp only touches the WireGuard tunnel it created.** `wg0` is the default
+  name of every WireGuard setup and `wg-quick` keeps its config at the same
+  `/etc/wireguard/wg0.conf` path, so a blind write would destroy an unrelated
+  VPN (and `wg-quick down wg0` would kill it first). Configs Wisp installs
+  start with `MANAGED_HEADER` (`# Managed by wisp`); `is_managed()`/
+  `foreign_tunnel_reason()` in `daemon/adapter.py` decide ownership, the server
+  refuses `connect`/`disconnect` on a foreign tunnel (`refuse_foreign_tunnel`),
+  startup `reset_stale_tunnel` skips anything unmanaged, `status` reports no
+  handshake age for it, and `Response.tunnel_conflict` lets the CLI and TUI
+  refuse **before** provisioning instead of after a billable VM exists. Origin:
+  owner decision that coexistence is not desirable — with `wg0` occupied Wisp
+  refuses and the user decides, rather than both VPNs fighting over the default
+  route. Older Wisp installs wrote no marker, so a leftover config from one
+  looks foreign once and must be moved aside manually.
 - **The daemon is a separate venv, and mirrors a local checkout**:
   `wisp daemon install` builds `/usr/local/lib/wisp/venv` (root-owned, so a
   root service never executes user-mutable code) from either the PyPI release

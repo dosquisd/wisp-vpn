@@ -67,6 +67,43 @@ this exact form, which is why the installer works while a manual
 Adding `~/.local/bin` to sudo's `secure_path` works too, but it is a
 system-wide policy change and Wisp does not require it.
 
+### Wisp refuses because `wg0` already exists
+
+`wg0` is the default interface name of every WireGuard setup, and `wg-quick`
+keeps its configuration at the same `/etc/wireguard/wg0.conf` path Wisp uses.
+Writing there would overwrite an unrelated VPN — and `wg-quick down wg0` would
+drop it first — so Wisp checks ownership before touching anything and refuses
+instead:
+
+```console
+$ wisp deploy aws
+WireGuard tunnel 'wg0' already exists and was not created by Wisp. Refusing to
+modify /etc/wireguard/wg0.conf, because overwriting it would destroy another
+WireGuard configuration. Bring that tunnel down (or move its config aside if it
+is a leftover) and retry.
+No VM was deployed.
+```
+
+Ownership is a marker line, not the file path: Wisp writes `# Managed by wisp`
+as the first line of every config it installs, and only a config with it is
+treated as its own. The refusal happens **before** provisioning, so a conflict
+never costs a deployed VM, and the same guard covers `wisp connect`,
+`wisp disconnect`, and the teardown path.
+
+There is no "share `wg0`" mode, and that is deliberate. Two full-tunnel VPNs
+both want the default route; the honest outcome is that Wisp steps aside and you
+decide which VPN you want up.
+
+What to do:
+
+- If `wg0` is your own VPN, bring it down before deploying, or keep it and use
+  another machine.
+- If you are upgrading from an older Wisp version that had a live session, the
+  leftover `/etc/wireguard/wg0.conf` from that install carries no marker and
+  therefore looks foreign. Confirm it is Wisp's (it points at an address Wisp
+  gave you), move it aside, and deploy again: `sudo mv
+  /etc/wireguard/wg0.conf{,.old}`.
+
 ### The daemon rejects the client config
 
 The daemon rejects client configs containing `PreUp`/`PostUp`/`PreDown`/

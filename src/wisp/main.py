@@ -43,7 +43,11 @@ from wisp.utils.pulumi import (
     stack_resource_counts,
 )
 from wisp.utils.watchdog import cancel_ttl_watchdog, schedule_ttl_watchdog
-from wisp.wireguard import connect_wireguard_client, disconnect_wireguard_client
+from wisp.wireguard import (
+    connect_wireguard_client,
+    disconnect_wireguard_client,
+    tunnel_conflict,
+)
 
 
 class CommandEnum(enum.StrEnum):
@@ -591,6 +595,18 @@ def main() -> None:
                 "ssh_port": creds.ssh_port,
                 "ssh_key_path": creds.ssh_key_path,
             }
+
+        # Refuse before provisioning: a local name conflict is predictable, and
+        # discovering it after `deploy_vm` would leave a billable VM behind.
+        conflict = tunnel_conflict()
+        if conflict:
+            print(conflict, file=sys.stderr)
+            print(
+                "No VM was deployed. Wisp only manages the WireGuard tunnel it "
+                "created.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
         try:
             vm_result = provider.deploy_vm(region=region, config=config)

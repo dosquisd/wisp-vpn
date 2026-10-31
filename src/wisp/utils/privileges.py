@@ -6,8 +6,8 @@ installed. Helpers here keep the copy-pasteable hints accurate instead of
 printing a command that only works in the shell that already has ``PATH`` set.
 
 This module is deliberately free of ``wisp.daemon`` imports: the unprivileged
-TUI uses it, and importing the daemon package would mark the TUI process as the
-privileged daemon.
+CLI and TUI use it, and nothing here needs the privileged package (or the
+handler modules behind it) to build a hint string.
 """
 
 import shutil

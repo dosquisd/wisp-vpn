@@ -12,6 +12,7 @@ from wisp.config.settings import get_default_region_for
 from wisp.providers import PROVIDERS_MAP, ProviderEnum
 from wisp.providers.base import get_provider_display_name
 from wisp.providers.vps import VPS_PLACEHOLDER_REGION
+from wisp.wireguard import tunnel_conflict
 
 # Static region list used until live AWS regions are fetched (or if that fails).
 FALLBACK_AWS_REGIONS = [
@@ -538,6 +539,14 @@ class DeployScreen(WispScreen):
 
         if provider_val == ProviderEnum.VPS.value:
             self._apply_vps_fields(state)
+
+        # Refuse before provisioning: `wg0` is the default name of every
+        # WireGuard setup, and a predictable local conflict must not cost a
+        # deployed VM.
+        conflict = tunnel_conflict()
+        if conflict:
+            self.notify(conflict, title="Tunnel conflict", severity="error", timeout=15)
+            return
 
         self.app.push_screen(ProgressScreen())
 

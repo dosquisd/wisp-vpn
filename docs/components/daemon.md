@@ -58,9 +58,13 @@ Wire protocol shared by the daemon and its local client:
 - `Request` dataclass: `action: ActionEnum`, `config_content: str | None`
   (only for `connect`). `encode()`/`decode()` use newline-terminated JSON.
 - `Response` dataclass: `ok: bool`, `message: str`,
-  `handshake_age_seconds: int | None` (defaulted, so older clients and daemons
-  stay compatible), with matching `encode()`/`decode()`. The age field is what
-  lets the tunnel view tell "local interface down" apart from "remote end gone".
+  `handshake_age_seconds: int | None`, `tunnel_conflict: str | None` (all
+  defaulted, so older clients and daemons stay compatible), with matching
+  `encode()`/`decode()`. The age field is what lets the tunnel view tell "local
+  interface down" apart from "remote end gone". `tunnel_conflict` carries the
+  reason the local tunnel name already belongs to another WireGuard setup, so
+  callers can refuse a deployment before provisioning instead of discovering
+  the conflict after a billable VM exists.
 
 ## `daemon/transport.py`
 
@@ -86,15 +90,29 @@ Transport implementations selected by `get_transport()`:
 Platform-specific privileged operations, selected by `get_adapter()`:
 
 - `BaseAdapter(ABC)` — abstract `connect(config_content)`, `disconnect()`,
-  `status()`, plus a `WG_CONF_PATH: Path` attribute, a `_run(cmd)` helper, and
-  `latest_handshake_epoch() -> int | None` (defaults to `None`).
+  `status()`, plus a `WG_CONF_PATH: Path` attribute, a `_run(cmd)` helper,
+  `latest_handshake_epoch() -> int | None` (defaults to `None`), and the
+  ownership API described below.
+- **Tunnel ownership.** `wg0` is the default name of every WireGuard setup and
+  `wg-quick` keeps its config at the same `/etc/wireguard/` path Wisp uses, so
+  the daemon must prove a file is its own before touching it. `connect` writes
+  `MANAGED_HEADER` (`# Managed by wisp`, inert for WireGuard) as the config's
+  first line; `is_managed()` reads it back; `interface_present()` reports
+  whether the name is live; `foreign_tunnel_reason()` returns a user-facing
+  explanation when the config exists without the marker, or the name is live
+  while the file is not ours. `with_ownership_header()` is applied by the
+  server, not the adapters, so both platforms mark configs the same way.
+- `tunnel_name` — interface name on Linux, tunnel name on Windows, derived from
+  the config stem in both cases; every command uses it instead of a literal
+  `wg0`.
 - `_parse_latest_handshakes(output: str) -> int | None` — parses `wg show <iface> latest-handshakes`
   output into the maximum epoch timestamp across peers, `0` if peers exist but have
   never handshook, or `None` if unparseable/empty.
 - `LinuxAdapter` — `WG_CONF_PATH = /etc/wireguard/wg0.conf`. `connect` writes
-  the config (`0600`) and runs `wg-quick up wg0`; `disconnect` runs
-  `wg-quick down wg0`; `status` returns `wg show wg0` output;
-  `latest_handshake_epoch()` queries `wg show wg0 latest-handshakes`.
+  the config (`0600`), best-effort `wg-quick down <name>` for a leftover of
+  ours, then `wg-quick up <name>`; `disconnect` runs `wg-quick down <name>`;
+  `status` returns `wg show <name>` output; `latest_handshake_epoch()` queries
+  `wg show <name> latest-handshakes`.
 - `WindowsAdapter` — `WG_CONF_PATH = /ProgramData/wisp/wireguard/wg0.conf`.
   Derives the tunnel name from the config stem and the tunnel service name
   (`WireGuardTunnel$<name>`). `connect` removes any leftover tunnel from a
@@ -114,6 +132,10 @@ Constants and async request handling:
 
 - `STALE_TUNNEL_SECONDS = 180` — maximum allowable handshake age during startup
   staleness detection.
+- `refuse_foreign_tunnel(adapter) -> Response | None` — the ownership guard.
+  Returns a rejection response when the tunnel belongs to another WireGuard
+  setup, or `None` when Wisp may proceed. Called before `connect` and before
+  `disconnect`.
 - `reset_stale_tunnel(adapter, now=None) -> bool` — startup hygiene function.
   The daemon runs as root/SYSTEM and cannot inspect the user's session marker,
   so WireGuard handshake recency is used as the cross-user signal. If the
@@ -121,14 +143,20 @@ Constants and async request handling:
   the latest handshake is older than 180s, `adapter.disconnect()` is called to
   tear down the leftover tunnel and prevent routing black holes. Healthy live
   tunnels (kept fresh via `PersistentKeepalive = 25`) are left undisturbed.
-- `handle_connect(config_content, adapter)` — writes the WireGuard config via
-  the adapter (`0600`/icacls) and brings the tunnel up. Returns
+  Only a tunnel marked as Wisp's is ever considered: a root daemon must not
+  drop someone else's VPN because it looked idle.
+- `handle_connect(config_content, adapter)` — validates the config, refuses a
+  foreign tunnel, then writes it via the adapter (`0600`/icacls) with the
+  ownership header and brings the tunnel up. Returns
   `Response(ok=True, "connected")` or the command's stderr on
   `CalledProcessError`.
-- `handle_disconnect(adapter)` — brings the tunnel down.
-- `handle_status(adapter)` — returns the tunnel status output, plus
+- `handle_disconnect(adapter)` — brings Wisp's tunnel down; refuses a foreign
+  one.
+- `handle_status(adapter)` — returns the tunnel status output,
+  `tunnel_conflict` from `adapter.foreign_tunnel_reason()`, and
   `handshake_age_seconds` computed from `adapter.latest_handshake_epoch()`
-  (`None` when the interface is down or has no peer).
+  (`None` when the interface is down, has no peer, or is not Wisp's — a
+  foreign tunnel's handshakes must never be attributed to a Wisp session).
 - `handle_client(reader, writer)` — reads one `Request`, dispatches by action
   with the platform adapter, writes one `Response`. Unknown actions and
   exceptions yield `ok=False`.

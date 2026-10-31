@@ -115,6 +115,16 @@ infrastructure:
   via `reset_stale_tunnel`. If an interface is up with no handshake recorded or its
   most recent handshake is older than 180 seconds, it is automatically disconnected
   before serving clients, preventing a stale tunnel from capturing default routes.
+  Only a tunnel Wisp created is ever touched (see below), so a reboot cannot take
+  down someone else's VPN.
+- **Tunnel ownership**: `wg0` is the default name of every WireGuard setup and
+  `wg-quick` keeps it at the same `/etc/wireguard/wg0.conf` path, so ownership is
+  decided by a marker line (`# Managed by wisp`), not by the path. The daemon
+  refuses `connect`/`disconnect` on a config without the marker, skips it at
+  startup, reports no handshake age for it, and `status` exposes the conflict
+  (`Response.tunnel_conflict`) so the CLI and TUI refuse **before** provisioning.
+  A conflict costs no billable VM, and there is deliberately no coexistence mode:
+  two full-tunnel VPNs fight over the default route.
 - **Windows demand start**: On Windows, tunnel services are installed with
   `sc.exe config ... start= demand`, preventing Windows from resurrecting a dead
   tunnel upon reboot.

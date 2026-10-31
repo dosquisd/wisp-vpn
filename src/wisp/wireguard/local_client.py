@@ -30,3 +30,21 @@ def status_wireguard_client() -> Response:
     """Ask the daemon for the current ``wg0`` status."""
     transport = get_transport()
     return transport.send(Request(action=ActionEnum.STATUS))
+
+
+def tunnel_conflict() -> str | None:
+    """Return why the local tunnel name is unusable, or ``None`` when it is free.
+
+    Callers use this before provisioning: ``wg0`` is the default name of every
+    WireGuard setup, and discovering the conflict only after a VM exists would
+    leave billable resources behind for a predictable local condition.
+
+    Returns:
+        str | None: The daemon's explanation when another WireGuard setup owns
+        the tunnel name, or ``None`` when Wisp may proceed (including when the
+        daemon is unreachable, which the caller handles separately).
+    """
+    try:
+        return status_wireguard_client().tunnel_conflict
+    except Exception:
+        return None

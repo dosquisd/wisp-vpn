@@ -1,22 +1,28 @@
 """Tests for the daemon's client-config validation (socket hardening)."""
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
 from wisp.daemon.adapter import (
+    MANAGED_HEADER,
     BaseAdapter,
     LinuxAdapter,
     WindowsAdapter,
     _parse_latest_handshakes,
+    with_ownership_header,
+)
+from wisp.daemon.server import (
+    handle_connect,
+    handle_disconnect,
+    handle_status,
+    reset_stale_tunnel,
+    validate_client_config,
 )
 from wisp.daemon.server import (
     main as server_main,
-)
-from wisp.daemon.server import (
-    reset_stale_tunnel,
-    validate_client_config,
 )
 
 CLEAN_CLIENT_CONFIG = """[Interface]
@@ -79,11 +85,26 @@ class FakeAdapter:
         handshake: int | None = None,
         status_code: int = 0,
         disconnect_exc: Exception | None = None,
+        managed: bool = True,
+        foreign_reason: str | None = None,
     ) -> None:
         self._handshake = handshake
         self._status_code = status_code
         self._disconnect_exc = disconnect_exc
+        self._managed = managed
+        self._foreign_reason = foreign_reason
         self.disconnect_calls = 0
+        self.connect_calls: list[str] = []
+
+    def connect(self, config_content: str) -> subprocess.CompletedProcess:
+        self.connect_calls.append(config_content)
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    def is_managed(self) -> bool:
+        return self._managed
+
+    def foreign_tunnel_reason(self) -> str | None:
+        return self._foreign_reason
 
     def latest_handshake_epoch(self) -> int | None:
         return self._handshake
@@ -149,6 +170,14 @@ async def test_reset_stale_tunnel_disconnect_generic_exception() -> None:
     assert adapter.disconnect_calls == 1
 
 
+async def test_reset_stale_tunnel_skips_foreign_tunnel() -> None:
+    """A stale wg0 that Wisp did not create must survive the daemon startup."""
+    adapter = FakeAdapter(handshake=400, managed=False)  # stale, but not ours
+    result = await reset_stale_tunnel(adapter, now=1000.0)
+    assert result is False
+    assert adapter.disconnect_calls == 0
+
+
 async def test_server_main_calls_reset_stale_tunnel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -190,6 +219,153 @@ async def test_server_main_survives_reset_stale_tunnel_exception(
     monkeypatch.setattr("wisp.daemon.server.reset_stale_tunnel", exploding_reset)
     await server_main(DummyTransport())
     assert served is True
+
+
+# --- Tunnel ownership (never touch someone else's WireGuard config) ----------
+
+
+def _linux_adapter_at(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    content: str | None = None,
+) -> LinuxAdapter:
+    """Point a LinuxAdapter at a temp config, optionally pre-created."""
+    conf = tmp_path / "wg0.conf"
+    if content is not None:
+        conf.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(LinuxAdapter, "WG_CONF_PATH", conf)
+    return LinuxAdapter()
+
+
+def test_is_managed_requires_the_ownership_header(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    managed = _linux_adapter_at(
+        monkeypatch, tmp_path, content=f"{MANAGED_HEADER}\n{CLEAN_CLIENT_CONFIG}"
+    )
+    assert managed.is_managed() is True
+
+
+def test_is_managed_rejects_foreign_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    foreign = _linux_adapter_at(monkeypatch, tmp_path, content=CLEAN_CLIENT_CONFIG)
+    assert foreign.is_managed() is False
+
+
+def test_is_managed_is_false_without_a_config_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert _linux_adapter_at(monkeypatch, tmp_path).is_managed() is False
+
+
+def test_foreign_tunnel_reason_is_none_when_the_name_is_free(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    adapter = _linux_adapter_at(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        adapter, "status", lambda: subprocess.CompletedProcess([], 1, stdout="")
+    )
+    assert adapter.foreign_tunnel_reason() is None
+
+
+def test_foreign_tunnel_reason_names_an_unmanaged_config_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    adapter = _linux_adapter_at(monkeypatch, tmp_path, content=CLEAN_CLIENT_CONFIG)
+    reason = adapter.foreign_tunnel_reason()
+    assert reason is not None
+    assert "wg0" in reason
+    assert str(tmp_path / "wg0.conf") in reason
+
+
+def test_foreign_tunnel_reason_names_a_live_unmanaged_tunnel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No config of ours, but the interface is up: someone else owns the name."""
+    adapter = _linux_adapter_at(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        adapter, "status", lambda: subprocess.CompletedProcess([], 0, stdout="peer")
+    )
+    assert adapter.foreign_tunnel_reason() is not None
+
+
+def test_foreign_tunnel_reason_is_none_for_a_managed_tunnel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    adapter = _linux_adapter_at(
+        monkeypatch, tmp_path, content=f"{MANAGED_HEADER}\n{CLEAN_CLIENT_CONFIG}"
+    )
+    assert adapter.foreign_tunnel_reason() is None
+
+
+def test_with_ownership_header_precedes_the_config() -> None:
+    assert with_ownership_header(CLEAN_CLIENT_CONFIG) == (
+        f"{MANAGED_HEADER}\n{CLEAN_CLIENT_CONFIG}"
+    )
+
+
+async def test_handle_connect_refuses_a_foreign_tunnel() -> None:
+    reason = "wg0 already exists and was not created by Wisp"
+    adapter = FakeAdapter(managed=False, foreign_reason=reason)
+
+    response = await handle_connect(CLEAN_CLIENT_CONFIG, adapter)
+
+    assert response.ok is False
+    assert response.message == reason
+    assert adapter.connect_calls == []
+
+
+async def test_handle_connect_marks_the_config_as_owned() -> None:
+    adapter = FakeAdapter(managed=True)
+
+    response = await handle_connect(CLEAN_CLIENT_CONFIG, adapter)
+
+    assert response.ok is True
+    assert adapter.connect_calls == [f"{MANAGED_HEADER}\n{CLEAN_CLIENT_CONFIG}"]
+
+
+async def test_handle_disconnect_refuses_a_foreign_tunnel() -> None:
+    adapter = FakeAdapter(managed=False, foreign_reason="not ours")
+
+    response = await handle_disconnect(adapter)
+
+    assert response.ok is False
+    assert adapter.disconnect_calls == 0
+
+
+async def test_handle_status_hides_handshake_age_for_a_foreign_tunnel() -> None:
+    """Reporting another VPN's handshakes would make the TUI adopt the wrong tunnel."""
+    adapter = FakeAdapter(handshake=990, managed=False)
+
+    response = await handle_status(adapter)
+
+    assert response.handshake_age_seconds is None
+
+
+async def test_handle_status_reports_handshake_age_for_a_managed_tunnel() -> None:
+    adapter = FakeAdapter(handshake=int(time.time()) - 5, managed=True)
+
+    response = await handle_status(adapter)
+
+    assert response.handshake_age_seconds is not None
+    assert 0 <= response.handshake_age_seconds <= 5
+
+
+async def test_handle_status_exposes_a_tunnel_conflict() -> None:
+    """Deploy callers refuse before provisioning when the name belongs to another VPN."""
+    adapter = FakeAdapter(managed=False, foreign_reason="wg0 is not ours")
+
+    response = await handle_status(adapter)
+
+    assert response.tunnel_conflict == "wg0 is not ours"
+
+
+async def test_handle_status_reports_no_conflict_for_a_managed_tunnel() -> None:
+    response = await handle_status(FakeAdapter(managed=True))
+
+    assert response.tunnel_conflict is None
 
 
 # --- Adapter handshake inspection & Windows start configuration --------------

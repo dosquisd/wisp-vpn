@@ -98,8 +98,8 @@ Platform schedulers: `systemd-run --user` (Linux, transient one-shot unit) and
   `sys.argv[0]`, and sets `PYTHONDONTWRITEBYTECODE=1` so a root-run import
   cannot leave root-owned `__pycache__` in the user's tool venv. Used by
   `daemon install` / `daemon uninstall` messages and by the TUI's outdated
-  daemon notice; it deliberately does not import `wisp.daemon`, which would
-  mark an unprivileged process as the daemon.
+  daemon notice; it keeps `utils/` free of `wisp.daemon` imports so a hint
+  never requires the privileged package.
 
 ## `utils/platform.py`
 

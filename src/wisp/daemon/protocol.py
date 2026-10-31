@@ -52,11 +52,16 @@ class Response:
             WireGuard handshake, or ``None`` when the local interface is down,
             has no peers, or the daemon cannot tell. The TUI uses this to
             detect that the remote end is gone.
+        tunnel_conflict (str | None): Reason the local tunnel name already
+            belongs to another WireGuard setup, or ``None`` when the name is
+            free or Wisp owns it. Callers check this before provisioning so a
+            predictable local conflict cannot cost a deployed VM.
     """
 
     ok: bool
     message: str = ""
     handshake_age_seconds: int | None = None
+    tunnel_conflict: str | None = None
 
     def encode(self) -> bytes:
         """Serialize to newline-terminated JSON bytes for the socket."""
