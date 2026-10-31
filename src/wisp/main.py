@@ -61,6 +61,7 @@ class CommandEnum(enum.StrEnum):
     DAEMON = "daemon"
     DISCONNECT = "disconnect"  # panic option: disconnect the local WireGuard client without destroying the remote VM
     CONNECT = "connect"
+    DOCTOR = "doctor"
 
 
 class RuntimeArgs(TypedDict):
@@ -281,6 +282,13 @@ def parse_args(argv: list[str] | None = None) -> RuntimeArgs:
         help="Disconnect the local WireGuard client from the remote VM",
     )
 
+    subparsers.add_parser(
+        "doctor",
+        parents=[log_level_parser],
+        help="Check this machine for missing prerequisites",
+        description="Check this machine for missing prerequisites (daemon, WireGuard tools, Pulumi, credentials, directories, etc.).",
+    )
+
     args = parser.parse_args(argv).__dict__
 
     return RuntimeArgs(
@@ -464,6 +472,11 @@ def main() -> None:
     command = args["command"]
     region = args["region"]
     provider_option = args["provider"]
+
+    if command == CommandEnum.DOCTOR:
+        from wisp.doctor import run_doctor_command
+
+        sys.exit(run_doctor_command())
 
     # Self-heal the single config file: a fresh install (or a wiped config
     # directory) would otherwise run on pure defaults with no hint of where
