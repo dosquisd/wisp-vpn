@@ -24,6 +24,7 @@ class CheckStatus(enum.StrEnum):
     FAIL = "fail"
     SKIP = "skip"
 
+
 @dataclass(frozen=True)
 class Check:
     name: str

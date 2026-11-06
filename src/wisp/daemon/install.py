@@ -515,9 +515,7 @@ def _prepare_windows_service_runtime() -> bool:
     try:
         for dll in runtime_dlls:
             destination = venv_dir / dll.name
-            if destination.is_file() and filecmp.cmp(
-                dll, destination, shallow=False
-            ):
+            if destination.is_file() and filecmp.cmp(dll, destination, shallow=False):
                 continue
             try:
                 shutil.copy2(dll, destination)
@@ -549,9 +547,7 @@ def _ensure_windows_group() -> bool:
     current_user = _run(["whoami"])
     user = current_user.stdout.strip()
     if current_user.returncode != 0 or not user:
-        _print_stderr(
-            "Could not determine the current Windows user for group setup."
-        )
+        _print_stderr("Could not determine the current Windows user for group setup.")
         return False
 
     members = _run(["net", "localgroup", WISP_GROUP])
@@ -861,9 +857,7 @@ def _install_windows() -> int:
 
     service_command = [sys.executable, "-m", "wisp.daemon.windows_service"]
     _run([*service_command, "remove"], ignore_failure=True)
-    install_result = _run(
-        [*service_command, "install"]
-    )
+    install_result = _run([*service_command, "install"])
     if install_result.returncode != 0:
         _print_stderr(
             "Could not install the Wisp Windows service. Run the command "
