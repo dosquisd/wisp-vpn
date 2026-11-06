@@ -143,74 +143,15 @@ function Test-Administrator {
 
 function Invoke-ElevatedDaemonSetup {
     if ($DryRun) {
-        Write-Plan "sudo wisp daemon install"
+        Write-Plan "wisp daemon install (requests Administrator permission when needed)"
         return
     }
 
-    $wisp = (Get-Command wisp -ErrorAction Stop).Source
-    $escapedWisp = $wisp.Replace("'", "''")
-    $daemonStdout = Join-Path $env:TEMP "wisp-daemon-install-$([guid]::NewGuid()).out"
-    $daemonStderr = Join-Path $env:TEMP "wisp-daemon-install-$([guid]::NewGuid()).err"
-    $daemonFailure = Join-Path $env:TEMP "wisp-daemon-install-$([guid]::NewGuid()).failure"
-    $escapedStdout = $daemonStdout.Replace("'", "''")
-    $escapedStderr = $daemonStderr.Replace("'", "''")
-    $escapedFailure = $daemonFailure.Replace("'", "''")
-    $elevatedCommand = @"
-`$ErrorActionPreference = 'Stop'
-try {
-    `$process = Start-Process -FilePath '$escapedWisp' -ArgumentList @('daemon', 'install') -Wait -PassThru -RedirectStandardOutput '$escapedStdout' -RedirectStandardError '$escapedStderr'
-    if (`$process.ExitCode -ne 0) {
-        throw "wisp daemon install failed with exit code `$(`$process.ExitCode)."
-    }
-    `$service = Get-Service -Name '$ServiceName' -ErrorAction Stop
-    if (`$service.Status -ne 'Running') {
-        Start-Service -Name '$ServiceName' -ErrorAction Stop
-    }
-}
-catch {
-    `$_ | Out-File -FilePath '$escapedFailure' -Encoding UTF8
-    exit 1
-}
-"@
-
-    $encodedCommand = [Convert]::ToBase64String(
-        [Text.Encoding]::Unicode.GetBytes($elevatedCommand)
-    )
-    $arguments = @(
-        "-NoProfile"
-        "-ExecutionPolicy"
-        "Bypass"
-        "-EncodedCommand"
-        $encodedCommand
-    )
-
-    $process = Start-Process `
-        -FilePath "powershell.exe" `
-        -Verb RunAs `
-        -ArgumentList $arguments `
-        -Wait `
-        -PassThru
-
-    if (Test-Path $daemonStdout) {
-        Get-Content $daemonStdout | ForEach-Object { Write-Host $_ }
-    }
-    if (Test-Path $daemonStderr) {
-        Get-Content $daemonStderr | ForEach-Object { Write-Host $_ }
-    }
-    if (Test-Path $daemonFailure) {
-        Get-Content $daemonFailure | ForEach-Object {
-            Write-Host "Elevated daemon setup error: $_" -ForegroundColor Red
-        }
-    }
-    Remove-Item `
-        $daemonStdout, `
-        $daemonStderr, `
-        $daemonFailure `
-        -Force `
-        -ErrorAction SilentlyContinue
-
-    if ($process.ExitCode -ne 0) {
-        throw "Elevated daemon setup failed with exit code $($process.ExitCode)."
+    $exitCode = Invoke-NativeCommand `
+        -FilePath (Get-Command wisp -ErrorAction Stop).Source `
+        -ArgumentList @("daemon", "install")
+    if ($exitCode -ne 0) {
+        throw "wisp daemon install failed with exit code $exitCode."
     }
 }
 

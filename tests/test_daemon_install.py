@@ -581,13 +581,13 @@ def test_install_windows_requires_admin(
         daemon_install, "_detect_platform", lambda: PlatformEnum.WINDOWS
     )
     monkeypatch.setattr(daemon_install, "_is_windows_admin", lambda: False)
+    monkeypatch.setattr(daemon_install, "_relaunch_windows_elevated", lambda: 0)
 
     exit_code = install_daemon()
 
-    assert exit_code == 1
-    # Nothing dispatched to pywin32: elevation is checked up front.
+    assert exit_code != 1
     assert runner.commands() == []
-    assert "elevated (Administrator)" in capsys.readouterr().err
+    assert "Requesting Administrator permission" in capsys.readouterr().out
 
 
 def test_install_windows_warns_when_wireguard_missing(
@@ -944,6 +944,7 @@ def test_install_windows_runs_pywin32_service_commands(
             "auto",
             "update",
         ],
+        ["sc.exe", "start", "WispService"],
     ]
 
 

@@ -32,6 +32,7 @@ This module is imported lazily by ``wisp.main``: importing anything from the
 would flip the CLI logger to the daemon's stderr-only sink for every command.
 """
 
+import base64
 import filecmp
 import json
 import os
@@ -482,6 +483,29 @@ def _is_windows_admin() -> bool:
         return False
 
 
+def _relaunch_windows_elevated() -> int:
+    """Re-run ``daemon install`` through the Windows UAC prompt."""
+    command = (
+        "$p = Start-Process -FilePath "
+        f"'{str(Path(sys.executable)).replace(chr(39), chr(39) * 2)}' "
+        "-ArgumentList @('-m','wisp.main','daemon','install') "
+        "-Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+    )
+    encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            encoded,
+        ],
+        check=False,
+    )
+    return result.returncode
+
+
 def _wireguard_warning(missing: list[str]) -> None:
     """Print an actionable warning listing missing WireGuard tools."""
     print(f"WARNING: WireGuard tools not found: {', '.join(missing)}")
@@ -894,11 +918,8 @@ def _install_windows() -> int:
         int: ``0`` on success, nonzero on failure (admin rights required).
     """
     if not _is_windows_admin():
-        _print_stderr(
-            "Installing the Wisp Windows service requires an elevated "
-            "(Administrator) terminal. Re-run from an elevated prompt."
-        )
-        return 1
+        print("Requesting Administrator permission to install the Wisp service.")
+        return _relaunch_windows_elevated()
     missing_tools = _wireguard_missing_windows()
     if missing_tools:
         _wireguard_warning(missing_tools)
@@ -932,6 +953,15 @@ def _install_windows() -> int:
         )
         return 1
     if not _configure_windows_service_environment():
+        return 1
+    start_result = _run(["sc.exe", "start", "WispService"])
+    if start_result.returncode != 0 and "already running" not in (
+        start_result.stderr + start_result.stdout
+    ).lower():
+        _print_stderr(
+            "Could not start the Wisp Windows service. Detail: "
+            f"{start_result.stderr.strip() or start_result.stdout.strip() or 'unknown error'}"
+        )
         return 1
     print("Wisp daemon service installed (startup: automatic).")
     return 0
