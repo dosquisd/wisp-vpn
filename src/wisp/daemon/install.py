@@ -485,25 +485,49 @@ def _is_windows_admin() -> bool:
 
 def _relaunch_windows_elevated() -> int:
     """Re-run ``daemon install`` through the Windows UAC prompt."""
+    stdout_file = tempfile.NamedTemporaryFile(
+        prefix="wisp-daemon-", suffix=".out", delete=False
+    )
+    stderr_file = tempfile.NamedTemporaryFile(
+        prefix="wisp-daemon-", suffix=".err", delete=False
+    )
+    stdout_path = Path(stdout_file.name)
+    stderr_path = Path(stderr_file.name)
+    stdout_file.close()
+    stderr_file.close()
+    def quote_ps(value: object) -> str:
+        return "'" + str(value).replace("'", "''") + "'"
     command = (
-        "$p = Start-Process -FilePath "
-        f"'{str(Path(sys.executable)).replace(chr(39), chr(39) * 2)}' "
+        "$p = Start-Process "
+        f"-FilePath {quote_ps(Path(sys.executable))} "
         "-ArgumentList @('-m','wisp.main','daemon','install') "
-        "-Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+        "-Verb RunAs -Wait -PassThru "
+        f"-RedirectStandardOutput {quote_ps(stdout_path)} "
+        f"-RedirectStandardError {quote_ps(stderr_path)}; "
+        "exit $p.ExitCode"
     )
     encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
-    result = subprocess.run(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-EncodedCommand",
-            encoded,
-        ],
-        check=False,
-    )
-    return result.returncode
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-EncodedCommand",
+                encoded,
+            ],
+            check=False,
+        )
+        for path in (stdout_path, stderr_path):
+            if path.is_file():
+                output = path.read_text(encoding="utf-8", errors="replace")
+                if output:
+                    print(output, end="", file=sys.stderr if path == stderr_path else sys.stdout)
+        return result.returncode
+    finally:
+        for path in (stdout_path, stderr_path):
+            path.unlink(missing_ok=True)
 
 
 def _wireguard_warning(missing: list[str]) -> None:
