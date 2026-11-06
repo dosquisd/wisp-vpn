@@ -25,6 +25,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 $WispPackage = "wisp-vpn"
+# Pinned: the newest managed Python can lack prebuilt wheels for some dependencies
+# (e.g. crc32c, pinned by oci), which would force a C++ compiler on the user.
+$WispPythonVersion = "3.12"
 $UvInstallUrl = "https://astral.sh/uv/install.ps1"
 $WireGuardInstallerUrl =
     "https://download.wireguard.com/windows-client/wireguard-installer.exe"
@@ -235,14 +238,29 @@ function Install-Uv {
         return
     }
 
-    $installer = Invoke-WebRequest `
-        -Uri $UvInstallUrl `
-        -UseBasicParsing
+    $installerPath = Join-Path $env:TEMP "wisp-uv-install-$([guid]::NewGuid()).ps1"
 
-    & powershell.exe `
-        -NoProfile `
-        -ExecutionPolicy Bypass `
-        -Command $installer.Content
+    try {
+        Invoke-WebRequest `
+            -Uri $UvInstallUrl `
+            -UseBasicParsing `
+            -OutFile $installerPath
+
+        $exitCode = Invoke-NativeCommand `
+            -FilePath "powershell.exe" `
+            -ArgumentList @(
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "`"$installerPath`""
+            )
+
+        if ($exitCode -ne 0) {
+            throw "The uv installer failed with exit code $exitCode."
+        }
+    }
+    finally {
+        Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+    }
 
     $env:Path = [Environment]::GetEnvironmentVariable(
         "Path",
@@ -263,7 +281,7 @@ function Install-WispCli {
     Write-Step "Installing Wisp CLI"
 
     if ($DryRun) {
-        Write-Plan "uv tool install --force --reinstall $WispPackage"
+        Write-Plan "uv tool install --force --reinstall --python $WispPythonVersion --python-preference only-managed $WispPackage"
         return
     }
 
@@ -272,7 +290,12 @@ function Install-WispCli {
     $uv = (Get-Command uv -ErrorAction Stop).Source
     $exitCode = Invoke-NativeCommand `
         -FilePath $uv `
-        -ArgumentList @("tool", "install", "--force", "--reinstall", $WispPackage)
+        -ArgumentList @(
+            "tool", "install", "--force", "--reinstall",
+            "--python", $WispPythonVersion,
+            "--python-preference", "only-managed",
+            $WispPackage
+        )
     if ($exitCode -ne 0) {
         throw "Could not install $WispPackage with uv."
     }
