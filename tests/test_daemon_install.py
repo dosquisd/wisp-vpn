@@ -604,6 +604,9 @@ def test_install_windows_warns_when_wireguard_missing(
     )
     monkeypatch.setattr(daemon_install, "_ensure_windows_group", lambda: True)
     monkeypatch.setattr(
+        daemon_install, "_prepare_windows_service_runtime", lambda: True
+    )
+    monkeypatch.setattr(
         daemon_install, "_configure_windows_service_environment", lambda: True
     )
 
@@ -979,10 +982,17 @@ def test_prepare_windows_service_runtime_skips_identical_locked_dlls(
     venv_dir = tmp_path / "venv"
     dll_dir = venv_dir / "Lib" / "site-packages" / "pywin32_system32"
     dll_dir.mkdir(parents=True)
+    host_dir = venv_dir / "Lib" / "site-packages" / "win32"
+    host_dir.mkdir(parents=True)
+    (host_dir / "pythonservice.exe").write_bytes(b"service-host")
     source = dll_dir / "pywintypes.dll"
     destination = venv_dir / source.name
     source.write_bytes(b"runtime")
     destination.write_bytes(b"runtime")
+    (venv_dir / "pythonservice.exe").write_bytes(b"service-host")
+    (venv_dir / "Lib" / "site-packages" / "win32" / "pythonservice.exe").write_bytes(
+        b"service-host"
+    )
     monkeypatch.setattr(
         daemon_install.sys,
         "executable",
@@ -998,6 +1008,9 @@ def test_prepare_windows_service_runtime_copies_python_runtime_dll(
     venv_dir = tmp_path / "venv"
     dll_dir = venv_dir / "Lib" / "site-packages" / "pywin32_system32"
     dll_dir.mkdir(parents=True)
+    host_dir = venv_dir / "Lib" / "site-packages" / "win32"
+    host_dir.mkdir(parents=True)
+    (host_dir / "pythonservice.exe").write_bytes(b"service-host")
     base_prefix = tmp_path / "python"
     base_prefix.mkdir()
     (base_prefix / "python314.dll").write_bytes(b"python-runtime")

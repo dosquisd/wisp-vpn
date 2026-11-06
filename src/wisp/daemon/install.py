@@ -565,12 +565,13 @@ def _wireguard_warning(missing: list[str]) -> None:
 
 
 def _prepare_windows_service_runtime() -> bool:
-    """Copy pywin32 runtime DLLs beside the service interpreter.
+    """Copy the pywin32 service host and runtime DLLs into the venv.
 
-    pywin32 places ``pythonservice.exe`` and its DLL dependencies under
-    ``pywin32_system32``. A service launched from a uv tool environment does
-    not reliably search that directory, so keep the runtime DLLs beside the
-    interpreter before registering the service.
+    The pywin32 installer normally moves ``pythonservice.exe`` and copies
+    ``pywintypes`` beside the base Python. That base can be a Microsoft Store
+    installation under ``WindowsApps``, which is not writable even for some
+    elevated processes. Keeping all service files in the uv environment avoids
+    that machine-level write and gives the SCM a stable host path.
 
     Returns:
         bool: True when preparation succeeds, otherwise False.
@@ -581,10 +582,21 @@ def _prepare_windows_service_runtime() -> bool:
         _print_stderr(f"Could not find pywin32 runtime directory: {dll_dir}")
         return False
 
+    host_source = venv_dir / "Lib" / "site-packages" / "win32" / "pythonservice.exe"
+    host_destination = venv_dir / "pythonservice.exe"
+    if not host_source.is_file():
+        _print_stderr(f"Could not find pywin32 service host: {host_source}")
+        return False
+
     runtime_dlls = list(dll_dir.glob("*.dll"))
     runtime_dlls.extend(Path(sys.base_prefix).glob("python*.dll"))
 
     try:
+        if not (
+            host_destination.is_file()
+            and filecmp.cmp(host_source, host_destination, shallow=False)
+        ):
+            shutil.copy2(host_source, host_destination)
         for dll in runtime_dlls:
             destination = venv_dir / dll.name
             if destination.is_file() and filecmp.cmp(dll, destination, shallow=False):
