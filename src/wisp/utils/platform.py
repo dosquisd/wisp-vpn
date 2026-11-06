@@ -52,17 +52,17 @@ def secure_file(path: Path, platform_enum: PlatformEnum | None = None) -> None:
             if not username.endswith("$"):
                 grants.append(f"{username}:F")
 
-            subprocess.run(
-                [
-                    "icacls",
-                    str(path),
-                    "/inheritance:r",
-                    "/grant:r",
-                    *grants,
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                subprocess.run(
+                    ["icacls", str(path), "/inheritance:r", "/grant:r", *grants],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                detail = (exc.stderr or exc.stdout or "").strip()
+                raise RuntimeError(
+                    f"icacls failed on {path} (exit {exc.returncode}): {detail}"
+                ) from exc
         case _:
             raise ValueError(f"Unsupported platform: {platform_enum}")
