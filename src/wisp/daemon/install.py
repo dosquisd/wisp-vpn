@@ -488,32 +488,70 @@ def _relaunch_windows_elevated() -> int:
     def quote_ps(value: object) -> str:
         return "'" + str(value).replace("'", "''") + "'"
 
-    command = (
+    stdout_file = tempfile.NamedTemporaryFile(
+        prefix="wisp-daemon-", suffix=".out", delete=False
+    )
+    stderr_file = tempfile.NamedTemporaryFile(
+        prefix="wisp-daemon-", suffix=".err", delete=False
+    )
+    stdout_path = Path(stdout_file.name)
+    stderr_path = Path(stderr_file.name)
+    stdout_file.close()
+    stderr_file.close()
+
+    inner_command = (
         "$ErrorActionPreference = 'Stop'; "
         "try { "
-        "$p = Start-Process "
-        f"-FilePath {quote_ps(Path(sys.executable))} "
-        "-ArgumentList @('-m','wisp.main','daemon','install') "
-        "-Verb RunAs -Wait -PassThru; "
+        f"& {quote_ps(Path(sys.executable))} -m wisp.main daemon install "
+        f"> {quote_ps(stdout_path)} 2> {quote_ps(stderr_path)}; "
+        "exit $LASTEXITCODE "
+        "} catch { "
+        f"$_ | Out-File -FilePath {quote_ps(stderr_path)} -Encoding utf8; "
+        "exit 1 "
+        "}"
+    )
+    inner_encoded = base64.b64encode(
+        inner_command.encode("utf-16le")
+    ).decode("ascii")
+    outer_command = (
+        "$ErrorActionPreference = 'Stop'; "
+        "try { "
+        "$p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru "
+        f"-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass',"
+        f"'-EncodedCommand',{quote_ps(inner_encoded)}); "
         "exit $p.ExitCode "
         "} catch { "
         "[Console]::Error.WriteLine($_.Exception.Message); "
         "exit 1 "
         "}"
     )
-    encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
-    result = subprocess.run(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-EncodedCommand",
-            encoded,
-        ],
-        check=False,
-    )
-    return result.returncode
+    outer_encoded = base64.b64encode(
+        outer_command.encode("utf-16le")
+    ).decode("ascii")
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-EncodedCommand",
+                outer_encoded,
+            ],
+            check=False,
+        )
+        for path, stream in (
+            (stdout_path, sys.stdout),
+            (stderr_path, sys.stderr),
+        ):
+            if path.is_file():
+                output = path.read_text(encoding="utf-8", errors="replace")
+                if output:
+                    print(output, end="", file=stream)
+        return result.returncode
+    finally:
+        stdout_path.unlink(missing_ok=True)
+        stderr_path.unlink(missing_ok=True)
 
 
 def _wireguard_warning(missing: list[str]) -> None:
