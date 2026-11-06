@@ -602,6 +602,10 @@ def test_install_windows_warns_when_wireguard_missing(
     monkeypatch.setattr(
         daemon_install, "_wireguard_missing_windows", lambda: ["wg-quick.exe"]
     )
+    monkeypatch.setattr(daemon_install, "_ensure_windows_group", lambda: True)
+    monkeypatch.setattr(
+        daemon_install, "_configure_windows_service_environment", lambda: True
+    )
 
     exit_code = install_daemon()
 
@@ -917,6 +921,9 @@ def test_install_windows_runs_pywin32_service_commands(
     monkeypatch.setattr(
         daemon_install, "_prepare_windows_service_runtime", lambda: True
     )
+    monkeypatch.setattr(
+        daemon_install, "_configure_windows_service_environment", lambda: True
+    )
 
     exit_code = install_daemon()
 
@@ -1027,6 +1034,9 @@ def test_install_windows_surfaces_admin_failure(
     monkeypatch.setattr(
         daemon_install, "_prepare_windows_service_runtime", lambda: True
     )
+    monkeypatch.setattr(
+        daemon_install, "_configure_windows_service_environment", lambda: True
+    )
 
     exit_code = install_daemon()
 
@@ -1036,6 +1046,46 @@ def test_install_windows_surfaces_admin_failure(
     assert "Access is denied" in captured.err
     # The update step never ran after the failed install.
     assert len(runner.commands()) == 2
+
+
+def test_configure_windows_service_environment_sets_runtime_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeWinreg:
+        HKEY_LOCAL_MACHINE = object()
+        KEY_READ = 1
+        KEY_SET_VALUE = 2
+        REG_MULTI_SZ = 3
+
+        def __init__(self) -> None:
+            self.values: dict[str, tuple[int, list[str]]] = {}
+
+        def OpenKey(self, root, path, reserved, access):
+            return ("open", path, access)
+
+        def QueryValueEx(self, key, name):
+            return (r"C:\Windows\System32", 1)
+
+        def CreateKeyEx(self, root, path, reserved, access):
+            return ("create", path, access)
+
+        def SetValueEx(self, key, name, reserved, value_type, value):
+            self.values[name] = (value_type, value)
+
+        def CloseKey(self, key):
+            pass
+
+    fake_winreg = FakeWinreg()
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    monkeypatch.setattr(daemon_install.sys, "base_prefix", r"C:\Python312")
+
+    assert daemon_install._configure_windows_service_environment() is True
+    assert fake_winreg.values == {
+        "Environment": (
+            fake_winreg.REG_MULTI_SZ,
+            [r"PATH=C:\Python312;C:\Windows\System32"],
+        )
+    }
 
 
 def test_uninstall_windows_runs_pywin32_remove(

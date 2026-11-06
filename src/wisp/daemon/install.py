@@ -533,7 +533,9 @@ def _ensure_windows_group() -> bool:
     Returns:
         bool: True when the group is ready, otherwise False.
     """
-    lookup = _run(["net", "localgroup", WISP_GROUP])
+    # A missing group is the normal first-install path; do not report that
+    # expected probe as an installation error.
+    lookup = _run(["net", "localgroup", WISP_GROUP], ignore_failure=True)
     if lookup.returncode != 0:
         created = _run(["net", "localgroup", WISP_GROUP, "/add"])
         if created.returncode != 0:
@@ -566,6 +568,56 @@ def _ensure_windows_group() -> bool:
             )
             return False
         print(f"User '{user}' added to group '{WISP_GROUP}'.")
+    return True
+
+
+def _configure_windows_service_environment() -> bool:
+    """Make the service's Python runtime discoverable by LocalSystem.
+
+    Returns:
+        bool: True when the service environment was configured.
+    """
+    try:
+        import winreg
+
+        machine_environment = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+            0,
+            winreg.KEY_READ,
+        )
+        try:
+            machine_path, _ = winreg.QueryValueEx(machine_environment, "Path")
+        finally:
+            winreg.CloseKey(machine_environment)
+
+        service_key = winreg.CreateKeyEx(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Services\WispService",
+            0,
+            winreg.KEY_SET_VALUE,
+        )
+        try:
+            service_path = ";".join(
+                part
+                for part in (sys.base_prefix, machine_path)
+                if part
+            )
+            winreg.SetValueEx(
+                service_key,
+                "Environment",
+                0,
+                winreg.REG_MULTI_SZ,
+                [f"PATH={service_path}"],
+            )
+        finally:
+            winreg.CloseKey(service_key)
+    except (ImportError, OSError, TypeError) as exc:
+        _print_stderr(
+            "Could not configure the Wisp service runtime environment: "
+            f"{exc}"
+        )
+        return False
     return True
 
 
@@ -878,6 +930,8 @@ def _install_windows() -> int:
             "Could not set the Wisp service to start automatically. Detail: "
             f"{update_result.stderr.strip() or 'unknown error'}"
         )
+        return 1
+    if not _configure_windows_service_environment():
         return 1
     print("Wisp daemon service installed (startup: automatic).")
     return 0

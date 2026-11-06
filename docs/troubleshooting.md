@@ -45,6 +45,19 @@ sudo systemctl restart wisp.socket wisp.service
 
 On Windows: `Get-Service WispService` and the Windows Event Viewer.
 
+If `scripts/install.ps1` reports that `Start-Service` cannot start
+`WispService`, inspect the daemon log before retrying:
+
+```powershell
+Get-Content "$env:ProgramData\wisp\logs\wisp.log" -Tail 80
+Get-WinEvent -LogName System -MaxEvents 30 |
+    Where-Object ProviderName -eq "Service Control Manager"
+```
+
+`wisp daemon install` configures the service's Python runtime environment for
+the `LocalSystem` account. Re-run the installer from an elevated PowerShell
+after correcting any service/runtime error shown in those logs.
+
 ### `sudo wisp daemon install` says `command not found`
 
 `sudo` does not inherit your `PATH`; it resets it to its own `secure_path`
