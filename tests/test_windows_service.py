@@ -36,3 +36,8 @@ def test_daemon_imports_are_deferred_until_after_service_running() -> None:
         and node.value.func.attr == "ReportServiceStatus"
         for node in svc_run.body
     )
+
+
+def test_service_module_compiles_with_deferred_transport_type() -> None:
+    """The service host must load before the transport module is imported."""
+    compile(SERVICE_FILE.read_text(encoding="utf-8"), str(SERVICE_FILE), "exec")
