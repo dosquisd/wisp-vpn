@@ -3,20 +3,35 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from wisp.daemon.transport import WindowsNamedPipeTransport
 
+
+def _configure_log_directory() -> None:
+    """Select a writable log directory before importing the daemon."""
+    configured = os.environ.get("WISP_LOG_DIR")
+    preferred = (
+        Path(configured)
+        if configured
+        else Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "wisp" / "logs"
+    )
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        with (preferred / "wisp.log").open("a", encoding="utf-8"):
+            pass
+    except OSError:
+        preferred = Path(tempfile.gettempdir()) / "wisp" / "logs"
+        preferred.mkdir(parents=True, exist_ok=True)
+    os.environ["WISP_LOG_DIR"] = str(preferred)
+
+
 # An SCM service has no console: stderr is lost, so the file handler is this
-# process's only usable sink. Point it at the install's log dir via a
-# process-local default — never machine-wide. Must run before the server
-# import configures the logger.
-os.environ.setdefault(
-    "WISP_LOG_DIR",
-    str(Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "wisp" / "logs"),
-)
+# process's only usable sink. Configure it before the daemon logger imports.
+_configure_log_directory()
 
 import servicemanager  # noqa: E402  # pyright: ignore[reportMissingModuleSource]
 import win32service  # noqa: E402  # pyright: ignore[reportMissingModuleSource]
