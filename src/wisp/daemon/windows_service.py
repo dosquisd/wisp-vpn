@@ -1,6 +1,10 @@
 import asyncio
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from wisp.daemon.transport import WindowsNamedPipeTransport
 
 # An SCM service has no console: stderr is lost, so the file handler is this
 # process's only usable sink. Point it at the install's log dir via a
@@ -14,9 +18,6 @@ os.environ.setdefault(
 import servicemanager  # noqa: E402  # pyright: ignore[reportMissingModuleSource]
 import win32service  # noqa: E402  # pyright: ignore[reportMissingModuleSource]
 import win32serviceutil  # noqa: E402  # pyright: ignore[reportMissingModuleSource]
-
-from wisp.daemon.server import main  # noqa: E402
-from wisp.daemon.transport import WindowsNamedPipeTransport
 
 
 class WispService(win32serviceutil.ServiceFramework):
@@ -45,6 +46,11 @@ class WispService(win32serviceutil.ServiceFramework):
         servicemanager.LogInfoMsg(f"{self._svc_name_} service started.")
 
         self.ReportServiceStatus(win32service.SERVICE_RUNNING)
+
+        # Do not import the daemon before the SCM receives SERVICE_RUNNING.
+        # pywin32 must complete startup promptly or Windows reports error 1053.
+        from wisp.daemon.server import main
+        from wisp.daemon.transport import WindowsNamedPipeTransport
 
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
