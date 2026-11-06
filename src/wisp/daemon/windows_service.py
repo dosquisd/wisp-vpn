@@ -41,14 +41,10 @@ class WispService(win32serviceutil.ServiceFramework):
         if self._loop is not None and self._transport is not None:
             self._loop.call_soon_threadsafe(self._transport.stop)
 
-    def SvcRun(self):
-        """Start and run the Wisp daemon."""
+    def SvcDoRun(self):
+        """Run the Wisp daemon after pywin32 reports the service as running."""
         servicemanager.LogInfoMsg(f"{self._svc_name_} service started.")
 
-        self.ReportServiceStatus(win32service.SERVICE_RUNNING)
-
-        # Do not import the daemon before the SCM receives SERVICE_RUNNING.
-        # pywin32 must complete startup promptly or Windows reports error 1053.
         from wisp.daemon.server import main
         from wisp.daemon.transport import WindowsNamedPipeTransport
 

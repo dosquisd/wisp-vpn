@@ -19,16 +19,7 @@ def test_daemon_imports_are_deferred_until_after_service_running() -> None:
     svc_run = next(
         node
         for node in service_class.body
-        if isinstance(node, ast.FunctionDef) and node.name == "SvcRun"
-    )
-
-    report_index = next(
-        index
-        for index, node in enumerate(svc_run.body)
-        if isinstance(node, ast.Expr)
-        and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Attribute)
-        and node.value.func.attr == "ReportServiceStatus"
+        if isinstance(node, ast.FunctionDef) and node.name == "SvcDoRun"
     )
     import_indexes = [
         index
@@ -38,4 +29,10 @@ def test_daemon_imports_are_deferred_until_after_service_running() -> None:
     ]
 
     assert import_indexes
-    assert all(index > report_index for index in import_indexes)
+    assert not any(
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "ReportServiceStatus"
+        for node in svc_run.body
+    )
