@@ -29,13 +29,13 @@ Configures the remote WireGuard server using Paramiko (SSH/SFTP):
    `wg`/`qrencode` are missing. After a successful install it writes those
    package names, one per line, to `/etc/wisp/installed-packages` (mode
    `0600`). The probe failing only disables cleanup — it never fails a deploy.
-4. Locates the generated client config (`wg0-client-*.conf`, with a fallback to
+5. Locates the generated client config (`wg0-client-*.conf`, with a fallback to
    the SSH user's home directory) and downloads it via SFTP to
    `WISP_DATA_DIR/wireguard-confs/wg0-client.conf` (creating the parent
    directory first).
-5. Ensures `PersistentKeepalive = 25` is in the client configuration
+6. Ensures `PersistentKeepalive = 25` is in the client configuration
    (`ensure_persistent_keepalive`).
-6. Arms the autonomous in-VM session watchdog timer (`install_session_watchdog`).
+7. Arms the autonomous in-VM session watchdog timer (`install_session_watchdog`).
 
 See [deployment flow](../deployment-flow.md#deploy).
 
@@ -70,6 +70,7 @@ Installs and enables the in-VM session watchdog systemd timer on the remote serv
 
 Tears down every Wisp-created WireGuard interface on a remote server
 (used by the VPS provider's `delete_vm`).
+
 1. Disarms the watchdog for each interface: disables `wisp-watchdog@<nic>.timer`
    and removes `/etc/wisp/watchdog-<nic>.conf`.
 2. For each `/etc/wireguard/wisp-*.conf`: `wg-quick down <nic>` (the config's
