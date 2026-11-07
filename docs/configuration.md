@@ -15,7 +15,6 @@ back to those constants.
 | `vm_boot_timeout` | `int` | `60` | Seconds to wait for the VM to boot / SSH to come up before configuring WireGuard |
 | `wireguard_interface` | `str` | `"wg0"` | WireGuard interface name |
 | `wireguard_ipv4` | `str` | `"10.66.66.1"` | Server-side WireGuard IPv4 |
-| `wireguard_ipv6` | `str` | `"fd42:42:42::1"` | Server-side WireGuard IPv6 |
 | `wireguard_dns1` | `str` | `"1.1.1.1"` | Primary DNS pushed to the client |
 | `wireguard_dns2` | `str` | `"1.0.0.1"` | Secondary DNS pushed to the client |
 | `wireguard_port` | `int` | `0` | UDP port; `0` means a random port in `49152–65535` |
@@ -34,10 +33,15 @@ routing is always full-tunnel:
 
 - **Security rules**: when true, ingress `cidr_blocks` is `["<your-ip>/32"]`;
   otherwise `["0.0.0.0/0"]`.
-- **Client AllowedIPs**: always `"0.0.0.0/0,::/0"` (route all traffic through
+- **Client AllowedIPs**: always `"0.0.0.0/0"` (route all IPv4 traffic through
   the tunnel), regardless of this flag. AllowedIPs governs what the client
   routes through the tunnel — mixing it with the firewall's ingress CIDR would
   leave a VPN that only routes traffic to itself.
+
+The tunnel itself is IPv4-only: neither interface gets an IPv6 address and the
+generated client config carries no `::/0` entry, so `wg-quick` never installs an
+IPv6 route the kernel may not serve. IPv6 is still usable as the *transport* —
+an IPv6 server endpoint is bracketed as usual.
 
 Your current public IP is looked up via `https://api.ipify.org`
 (`utils.get_public_ip`).
@@ -84,8 +88,8 @@ import time. The data directory is created with mode `0700`. The project-level
 ### WireGuard defaults
 
 `WIREGUARD_INTERFACE="wg0"`, `WIREGUARD_IPV4="10.66.66.1"`,
-`WIREGUARD_IPV6="fd42:42:42::1"`, `WIREGUARD_DNS1="1.1.1.1"`,
-`WIREGUARD_DNS2="1.0.0.1"`, `WIREGUARD_CLIENT_NAME=""`.
+`WIREGUARD_DNS1="1.1.1.1"`, `WIREGUARD_DNS2="1.0.0.1"`,
+`WIREGUARD_CLIENT_NAME=""`.
 
 ## AWS constants (`providers/aws/constants.py`)
 

@@ -32,7 +32,7 @@ DNS = 1.1.1.1
 
 [Peer]
 PublicKey = def456=
-AllowedIPs = 0.0.0.0/0, ::/0
+AllowedIPs = 0.0.0.0/0
 Endpoint = 203.0.113.10:51820
 """
 

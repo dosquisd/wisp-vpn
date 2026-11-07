@@ -183,7 +183,6 @@ def ensure_log_dir() -> Path:
 # WireGuard defaults (non-interactive installer)
 WIREGUARD_INTERFACE: str = "wg0"
 WIREGUARD_IPV4: str = "10.66.66.1"
-WIREGUARD_IPV6: str = "fd42:42:42::1"
 WIREGUARD_DNS1: str = "1.1.1.1"
 WIREGUARD_DNS2: str = "1.0.0.1"
 WIREGUARD_CLIENT_NAME: str = ""

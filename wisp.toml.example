@@ -34,7 +34,6 @@
 # vm_boot_timeout = 60            # seconds to wait for the VM/SSH to come up
 # wireguard_interface = "wg0"
 # wireguard_ipv4 = "10.66.66.1"
-# wireguard_ipv6 = "fd42:42:42::1"
 # wireguard_dns1 = "1.1.1.1"
 # wireguard_dns2 = "1.0.0.1"
 # wireguard_port = 0              # 0 selects a random port (49152-65535)

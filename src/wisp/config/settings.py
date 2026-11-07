@@ -28,7 +28,6 @@ from wisp.config.constants import (
     WIREGUARD_DNS2,
     WIREGUARD_INTERFACE,
     WIREGUARD_IPV4,
-    WIREGUARD_IPV6,
     WISP_USER_CONFIG_PATH,
 )
 
@@ -235,7 +234,6 @@ def save_session_config(
             "vm_boot_timeout": cfg.vm_boot_timeout,
             "wireguard_interface": cfg.wireguard_interface,
             "wireguard_ipv4": cfg.wireguard_ipv4,
-            "wireguard_ipv6": cfg.wireguard_ipv6,
             "wireguard_dns1": cfg.wireguard_dns1,
             "wireguard_dns2": cfg.wireguard_dns2,
             "wireguard_port": cfg.wireguard_port,
@@ -271,7 +269,6 @@ class WispConfig:
     vm_boot_timeout: int = DEFAULT_VM_BOOT_TIMEOUT_SECONDS
     wireguard_interface: str = WIREGUARD_INTERFACE
     wireguard_ipv4: str = WIREGUARD_IPV4
-    wireguard_ipv6: str = WIREGUARD_IPV6
     wireguard_dns1: str = WIREGUARD_DNS1
     wireguard_dns2: str = WIREGUARD_DNS2
     wireguard_port: int = 0  # 0 indicates dynamic random port (49152-65535)
@@ -294,7 +291,6 @@ def load_wisp_config() -> WispConfig:
         vm_boot_timeout=general.get("vm_boot_timeout", DEFAULT_VM_BOOT_TIMEOUT_SECONDS),
         wireguard_interface=general.get("wireguard_interface", WIREGUARD_INTERFACE),
         wireguard_ipv4=general.get("wireguard_ipv4", WIREGUARD_IPV4),
-        wireguard_ipv6=general.get("wireguard_ipv6", WIREGUARD_IPV6),
         wireguard_dns1=general.get("wireguard_dns1", WIREGUARD_DNS1),
         wireguard_dns2=general.get("wireguard_dns2", WIREGUARD_DNS2),
         wireguard_port=int(general.get("wireguard_port", 0)),

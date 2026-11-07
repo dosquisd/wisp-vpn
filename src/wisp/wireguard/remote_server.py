@@ -804,12 +804,10 @@ def configure_remote_server(
     wireguard_public_ip = inventory_context["wireguard_public_ip"]
     wireguard_interface = inventory_context["wireguard_interface"]
     wireguard_ipv4 = inventory_context["wireguard_ipv4"]
-    wireguard_ipv6 = inventory_context["wireguard_ipv6"]
     wireguard_dns1 = inventory_context["wireguard_dns1"]
     wireguard_dns2 = inventory_context["wireguard_dns2"]
     wireguard_client_name = inventory_context["wireguard_client_name"]
     wireguard_client_ipv4 = inventory_context["wireguard_client_ipv4"]
-    wireguard_client_ipv6 = inventory_context["wireguard_client_ipv6"]
     wireguard_skip_client = inventory_context["wireguard_skip_client"]
 
     logger.info(f"Configuring remote WireGuard server at {instance_ip} via SSH...")
@@ -821,13 +819,11 @@ def configure_remote_server(
         "ALLOWED_IPS": allowed_ips,
         "SERVER_WG_NIC": wireguard_interface,
         "SERVER_WG_IPV4": wireguard_ipv4,
-        "SERVER_WG_IPV6": wireguard_ipv6,
         "CLIENT_DNS_1": wireguard_dns1,
         "CLIENT_DNS_2": wireguard_dns2,
         "AUTO_INSTALL": "y",
         "CLIENT_NAME": wireguard_client_name,
         "CLIENT_WG_IPV4": wireguard_client_ipv4,
-        "CLIENT_WG_IPV6": wireguard_client_ipv6,
         "SKIP_CLIENT_CREATION": wireguard_skip_client,
     }
 

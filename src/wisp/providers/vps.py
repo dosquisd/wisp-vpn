@@ -31,7 +31,6 @@ from wisp.config.constants import (
     WIREGUARD_DNS1,
     WIREGUARD_DNS2,
     WIREGUARD_IPV4,
-    WIREGUARD_IPV6,
     ensure_client_conf_dir,
 )
 from wisp.config.credentials import VPSCredentials, resolve_vps_credentials
@@ -160,7 +159,7 @@ class VPSProvider(BaseProvider):
         # Client routing is always full-tunnel: AllowedIPs governs what the
         # client routes through the tunnel; the VPS has no cloud firewall
         # for Wisp to restrict (force_current_ip does not apply here).
-        allowed_ips = "0.0.0.0/0,::/0"
+        allowed_ips = "0.0.0.0/0"
         wireguard_port = (
             config.wireguard_port if config.wireguard_port > 0 else get_wireguard_port()
         )
@@ -176,12 +175,10 @@ class VPSProvider(BaseProvider):
             # already run its own wg0, and destroy only removes wisp-* files.
             wireguard_interface=_new_server_interface_name(),
             wireguard_ipv4=WIREGUARD_IPV4,
-            wireguard_ipv6=WIREGUARD_IPV6,
             wireguard_dns1=WIREGUARD_DNS1,
             wireguard_dns2=WIREGUARD_DNS2,
             wireguard_client_name=WIREGUARD_CLIENT_NAME,
             wireguard_client_ipv4="",
-            wireguard_client_ipv6="",
             wireguard_skip_client="n",
             watchdog_mode="vps",
             watchdog_ttl_minutes=config.max_session_ttl_minutes,

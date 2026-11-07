@@ -22,12 +22,10 @@ class InventoryContext(TypedDict):
     wireguard_public_ip: str
     wireguard_interface: str
     wireguard_ipv4: str
-    wireguard_ipv6: str
     wireguard_dns1: str
     wireguard_dns2: str
     wireguard_client_name: str
     wireguard_client_ipv4: str
-    wireguard_client_ipv6: str
     wireguard_skip_client: str
     watchdog_mode: str
     watchdog_ttl_minutes: int

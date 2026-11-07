@@ -20,7 +20,6 @@ from wisp.config.constants import (
     WIREGUARD_DNS2,
     WIREGUARD_INTERFACE,
     WIREGUARD_IPV4,
-    WIREGUARD_IPV6,
     WIREGUARD_KEY_PATH,
     ensure_client_conf_dir,
     ensure_keys_dir,
@@ -180,7 +179,7 @@ class PulumiProvider(BaseProvider, ABC):
         # Client routing is always full-tunnel: AllowedIPs governs what the
         # client routes through the tunnel, not who can reach the server
         # (that is the firewall's job, where force_current_ip applies).
-        allowed_ips = "0.0.0.0/0,::/0"
+        allowed_ips = "0.0.0.0/0"
 
         # Build the inventory context for remote configuration
         template_context = InventoryContext(
@@ -192,12 +191,10 @@ class PulumiProvider(BaseProvider, ABC):
             wireguard_public_ip=public_ip,
             wireguard_interface=WIREGUARD_INTERFACE,
             wireguard_ipv4=WIREGUARD_IPV4,
-            wireguard_ipv6=WIREGUARD_IPV6,
             wireguard_dns1=WIREGUARD_DNS1,
             wireguard_dns2=WIREGUARD_DNS2,
             wireguard_client_name=WIREGUARD_CLIENT_NAME,
             wireguard_client_ipv4="",
-            wireguard_client_ipv6="",
             wireguard_skip_client="n",
             watchdog_mode="cloud",
             watchdog_ttl_minutes=config.max_session_ttl_minutes,

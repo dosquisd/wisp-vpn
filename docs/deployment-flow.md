@@ -50,7 +50,7 @@ completed failure.
    `icacls` with well-known SIDs (Windows).
 
 5. **Compute AllowedIPs.** `<your-ip>/32` if `force_current_ip`, else
-   `0.0.0.0/0,::/0`.
+   `0.0.0.0/0`.
 
 6. **Configure the remote server.** `configure_remote_server(context)`
    (`wireguard/remote_server.py`) runs:
@@ -61,8 +61,8 @@ completed failure.
      WireGuard server installer, based on `angristan/wireguard-install`).
    - Executes the script remotely with configuration passed as environment variables:
      `SERVER_PUB_IP`, `SERVER_PORT`, `ALLOWED_IPS`, `SERVER_WG_NIC`,
-     `SERVER_WG_IPV4`, `SERVER_WG_IPV6`, `CLIENT_DNS_1`, `CLIENT_DNS_2`,
-     `AUTO_INSTALL=y`, `CLIENT_NAME`, `CLIENT_WG_IPV4`, `CLIENT_WG_IPV6`,
+     `SERVER_WG_IPV4`, `CLIENT_DNS_1`, `CLIENT_DNS_2`,
+     `AUTO_INSTALL=y`, `CLIENT_NAME`, `CLIENT_WG_IPV4`,
      `SKIP_CLIENT_CREATION`
    - The script installs WireGuard non-interactively, configures the interface,
      firewall, routing, and generates the client configuration

@@ -22,9 +22,9 @@ Configures the remote WireGuard server using Paramiko (SSH/SFTP):
    `/tmp/wireguard-install.sh` and makes it executable.
 3. Executes the script remotely with `sudo` (via a pseudo-terminal), passing
    the configuration as environment variables: `SERVER_PUB_IP`, `SERVER_PORT`,
-   `ALLOWED_IPS`, `SERVER_WG_NIC`, `SERVER_WG_IPV4`, `SERVER_WG_IPV6`,
+   `ALLOWED_IPS`, `SERVER_WG_NIC`, `SERVER_WG_IPV4`,
    `CLIENT_DNS_1`, `CLIENT_DNS_2`, `AUTO_INSTALL=y`, `CLIENT_NAME`,
-   `CLIENT_WG_IPV4`, `CLIENT_WG_IPV6`, `SKIP_CLIENT_CREATION`.
+   `CLIENT_WG_IPV4`, `SKIP_CLIENT_CREATION`.
 4. Before installing, probes which package manager the server has and which of
    `wg`/`qrencode` are missing. After a successful install it writes those
    package names, one per line, to `/etc/wisp/installed-packages` (mode
@@ -132,7 +132,7 @@ raises a descriptive `PermissionError` if the socket cannot be connected
 
 `TypedDict` of the variables consumed by `configure_remote_server`:
 SSH user, instance IP, SSH key file, WireGuard port, allowed IPs, public IP,
-interface, IPv4/IPv6, DNS 1/2, client name, client IPv4/IPv6, `skip_client`,
+interface, IPv4, DNS 1/2, client name, client IPv4, `skip_client`,
 `watchdog_mode` (`"cloud"` or `"vps"`), `watchdog_ttl_minutes`, and
 `watchdog_idle_seconds`. Populated during deploy from provider outputs and the
 active `WispConfig`.
