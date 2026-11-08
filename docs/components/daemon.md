@@ -9,7 +9,7 @@ the unprivileged frontend talks to it over a Unix socket (Linux) or Named Pipe
 
 `wisp daemon install` / `wisp daemon uninstall`
 ([`wisp/daemon/install.py`](../../src/wisp/daemon/install.py), wired from
-`wisp.main`) installs, refreshes, and removes the daemon on its own — on Linux
+`wisp.cli.commands.daemon`) installs, refreshes, and removes the daemon on its own — on Linux
 no setup script is involved, and on Windows `setup.ps1` still covers the
 service install:
 

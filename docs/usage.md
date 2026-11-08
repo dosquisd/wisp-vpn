@@ -1,7 +1,8 @@
 # Usage
 
 Wisp has two modes: an interactive TUI (default) and non-interactive CLI
-subcommands. Both are dispatched from `wisp.main:main` (`parse_args` + `main`).
+subcommands. Both are dispatched from `wisp.main:main` (delegating to
+`wisp.cli.parser:main`).
 
 ## Launching
 
@@ -262,20 +263,20 @@ no command is given, it defaults to the TUI.
 ## The TUI
 
 The TUI is built with [Textual](https://textual.textualize.io/). Global styles
-and screen registration live in `cli/app.py`; per-session state lives in
-`cli/state.py` (`AppState`).
+and screen registration live in `tui/app.py`; per-session state lives in
+`tui/state.py` (`AppState`).
 
 ### Screens
 
 | Screen | File | Purpose |
 | ------ | ---- | ------ |
-| Main menu | `screens/main_menu.py` | Entry point; shows current config summary; navigate to Deploy/Config/Quit |
-| Configuration | `screens/config.py` | Edit per-session `WispConfig` (in memory) |
-| Deploy | `screens/deploy.py` | Pick provider + region, review summary, start deploy |
-| Progress | `screens/progress.py` | Live deploy/destroy progress; shows results; destroy button |
-| Tunnel | `screens/tunnel.py` | Live session view; health from handshake age; leaves the view when the session ends |
-| Session ended | `screens/session_ended.py` | Remote end is gone; offer state reconciliation or return to the menu |
-| External teardown | `screens/session_ended.py` | Another Wisp process is destroying the session; returns automatically |
+| Main menu | `tui/screens/main_menu.py` | Entry point; shows current config summary; navigate to Deploy/Config/Quit |
+| Configuration | `tui/screens/config.py` | Edit per-session `WispConfig` (in memory) |
+| Deploy | `tui/screens/deploy.py` | Pick provider + region, review summary, start deploy |
+| Progress | `tui/screens/progress.py` | Live deploy/destroy progress; shows results; destroy button |
+| Tunnel | `tui/screens/tunnel.py` | Live session view; health from handshake age; leaves the view when the session ends |
+| Session ended | `tui/screens/session_ended.py` | Remote end is gone; offer state reconciliation or return to the menu |
+| External teardown | `tui/screens/session_ended.py` | Another Wisp process is destroying the session; returns automatically |
 
 ### Navigation and key bindings
 

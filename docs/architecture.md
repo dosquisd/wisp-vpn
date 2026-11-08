@@ -17,14 +17,26 @@ orchestrates three cooperating pieces:
 
 ```console
 src/wisp/
-├── main.py             # Entry point; argparse CLI + TUI dispatch
+├── main.py             # Thin entry point; delegates to cli.parser; wisp console script
+├── doctor.py           # Read-only diagnostic checks and report rendering (wisp doctor)
 ├── schemas.py          # Shared TypedDicts (SSH/WireGuard context for the deploy)
 ├── session.py          # Session lifecycle: SessionGuard, active-session marker, teardown
-├── cli/                # Textual TUI
+├── cli/                # Argument parser and non-interactive CLI commands
+│   ├── parser.py       # Argument parser and command dispatch
+│   ├── args.py         # CommandEnum, RuntimeArgs TypedDict
+│   ├── options.py      # Shared argparse flags and helpers
+│   ├── __main__.py     # python -m wisp.cli launcher
+│   └── commands/       # deploy, destroy, connect, disconnect, daemon, doctor, gc, regions
+├── tui/                # Interactive Textual TUI
 │   ├── app.py          # WispApp (global styles, screen registration, shutdown wiring)
 │   ├── state.py        # AppState (in-memory session state)
-│   ├── __main__.py     # `python -m wisp.cli` launcher
+│   ├── session_boot.py # arm_session_guard: teardown closure for deploy and adoption
+│   ├── __main__.py     # python -m wisp.tui launcher
 │   └── screens/        # MainMenu, Config, Deploy, Progress, Tunnel, Shutdown screens
+├── services/           # Shared domain orchestration services
+│   ├── deploy.py       # deploy_session, TunnelConflictError
+│   ├── destroy.py      # destroy_session
+│   └── providers.py    # create_provider, resolve_vps_connection, vps_payload
 ├── config/             # Configuration
 │   ├── settings.py     # TOML loading, WispConfig dataclass, per-provider defaults
 │   ├── credentials.py  # Per-provider credential resolution (AWS/OCI/GCP/VPS)

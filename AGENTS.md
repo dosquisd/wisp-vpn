@@ -34,15 +34,25 @@ list, see `ProviderEnum`
 
 ```text
 src/wisp/
-├── main.py                 # Entry point; argparse CLI + TUI dispatch; wisp console script
+├── main.py                 # Thin entry point; delegates to cli.parser; wisp console script
 ├── doctor.py               # Read-only diagnostic checks and report rendering (wisp doctor)
 ├── schemas.py              # Shared TypedDicts (InventoryContext: SSH/WireGuard deploy context)
-├── cli/                    # Textual TUI
+├── cli/                    # Argument parser and non-interactive CLI commands
+│   ├── parser.py           # Argument parser and command dispatch
+│   ├── args.py             # CommandEnum, RuntimeArgs TypedDict
+│   ├── options.py          # Shared argparse flags and helpers
+│   ├── __main__.py         # python -m wisp.cli launcher
+│   └── commands/           # deploy, destroy, connect, disconnect, daemon, doctor, gc, regions
+├── tui/                    # Interactive Textual TUI
 │   ├── app.py              # WispApp (styles, screen registration, startup adoption)
 │   ├── state.py            # AppState (in-memory session state, TOML-derived defaults)
 │   ├── session_boot.py     # arm_session_guard: one teardown for deploys and adoption
-│   ├── __main__.py         # python -m wisp.cli launcher
+│   ├── __main__.py         # python -m wisp.tui launcher
 │   └── screens/            # MainMenu, Config, Deploy, Progress, Tunnel, SessionEnded
+├── services/               # Shared domain orchestration services
+│   ├── deploy.py           # deploy_session, TunnelConflictError
+│   ├── destroy.py          # destroy_session
+│   └── providers.py        # create_provider, resolve_vps_connection, vps_payload
 ├── config/
 │   ├── settings.py         # TOML loading (user+project merged), WispConfig, per-provider defaults
 │   ├── credentials.py      # Per-provider credential resolution (AWS/OCI/GCP/VPS) + validation
@@ -146,7 +156,7 @@ resolved per user via `platformdirs` (env overrides `WISP_DATA_DIR`,
   `STALE_TUNNEL_SECONDS` is adopted into the tunnel view. Never hijack a marker
   whose owner is alive, and never rewrite the marker or reschedule the OS
   one-shot during adoption (that would silently extend the session).
-  `cli/session_boot.arm_session_guard` is the single construction of the
+  `tui/session_boot.arm_session_guard` is the single construction of the
   teardown closure for both fresh deploys and adoption.
 - **Remote death is detected, never assumed** (`TunnelScreen.health_state`):
   `local_down` says nothing about the remote end (`wisp disconnect` is local);
