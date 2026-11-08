@@ -3,7 +3,7 @@
 Per-module reference for the `wisp` package.
 
 | Module | Doc |
-|--------|-----|
+| -------- | ----- |
 | `wisp.main` | [entry-point.md](./entry-point.md) |
 | `wisp.providers` | [providers.md](./providers.md) |
 | `wisp.wireguard` | [wireguard.md](./wireguard.md) |
