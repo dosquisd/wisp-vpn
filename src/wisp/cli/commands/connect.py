@@ -16,7 +16,16 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     """
     subparsers.add_parser(
         "connect",
-        help="Connect the local WireGuard client to the remote VM",
+        help="Reconnect the local WireGuard client to a running session",
+        description=(
+            "Bring the local WireGuard client back up from the stored client "
+            "config (wireguard-confs/wg0-client.conf). Purely local: no cloud "
+            "API calls and no provider credentials. Useful after a client "
+            "reboot or sleep cycle, as long as the session's TTL is still "
+            "active."
+        ),
+        epilog="Example:\n  wisp connect\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
 

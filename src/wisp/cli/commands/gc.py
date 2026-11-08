@@ -29,6 +29,21 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     gc_parser = subparsers.add_parser(
         "gc",
         help="Inspect leftover Wisp Pulumi stacks and optionally destroy them",
+        description=(
+            "Garbage collection for leftover Pulumi stacks. Lists every "
+            "'wisp-stack-*' in the backend and counts the resources recorded "
+            "in each stack's exported state. No program runs, so a stack with "
+            "broken credentials or drifted code still reports its resources.\n\n"
+            "This is the recovery path for infrastructure left behind by a "
+            "deploy that died before its teardown ran."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  wisp gc                 # report leftovers only\n"
+            "  wisp gc --refresh       # reconcile state with the cloud first\n"
+            "  wisp gc --destroy       # tear down every leftover stack\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     gc_parser.add_argument(
         "--destroy",

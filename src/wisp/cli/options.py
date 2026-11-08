@@ -25,7 +25,11 @@ def add_provider(parser: argparse.ArgumentParser) -> None:
         type=str,
         choices=PROVIDER_CHOICES,
         default=get_default_provider(),
-        help="Cloud provider to use (default %(default)s).",
+        help=(
+            "Cloud provider to use: "
+            + ", ".join(PROVIDER_CHOICES)
+            + " (default: %(default)s)."
+        ),
     )
 
 

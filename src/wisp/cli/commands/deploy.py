@@ -34,7 +34,23 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     """
     parser = subparsers.add_parser(
         "deploy",
-        help="Deploy a VM",
+        help="Provision a VM (or configure a VPS) and connect the tunnel",
+        description=(
+            "Provision a cloud VM, install WireGuard on it, and connect this "
+            "machine as a client. With the 'vps' provider, skip provisioning "
+            "and configure WireGuard on a server you already own over SSH.\n\n"
+            "The session is recorded in the active-session marker. When a TTL "
+            "is set, the in-VM watchdog is armed and a local one-shot is "
+            "scheduled to run 'wisp destroy' even if this process exits."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  wisp deploy aws -r us-east-1\n"
+            "  wisp deploy oci                      # region from [oci].region\n"
+            "  wisp deploy gcp -r us-central1 --ttl 120\n"
+            "  wisp deploy vps --host 203.0.113.10 --ssh-user ubuntu\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     add_provider(parser)
     add_log_level(parser)
@@ -51,9 +67,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         metavar="MINUTES",
         help=(
-            "Session TTL watchdog: run `wisp destroy` automatically after "
-            "this many minutes, even if Wisp exits (default: the configured "
-            "[general].max_session_ttl_minutes; 0 disables the watchdog)."
+            "Session TTL in minutes. Arms the in-VM watchdog and schedules a "
+            "local 'wisp destroy' one-shot, even if Wisp exits (default: "
+            "[general].max_session_ttl_minutes; 0 disables both)."
         ),
     )
     parser.add_argument(
@@ -62,7 +78,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         metavar="PORT",
         help=(
-            "UDP port for the WireGuard tunnel (default: the configured "
+            "UDP port for the WireGuard tunnel (default: "
             "[general].wireguard_port; 0 picks a random port)."
         ),
     )

@@ -14,8 +14,19 @@ def build_parser() -> argparse.ArgumentParser:
     Returns:
         argparse.ArgumentParser: Configured argument parser.
     """
-    parser = argparse.ArgumentParser(description="Wisp CLI")
-    subparsers = parser.add_subparsers(dest="command")
+    parser = argparse.ArgumentParser(
+        prog="wisp",
+        description=(
+            "Wisp provisions ephemeral WireGuard VPNs on your own cloud.\n"
+            "Run without a subcommand to launch the interactive TUI."
+        ),
+        epilog=(
+            "Run 'wisp <command> --help' for command details and examples.\n"
+            "Configuration lives in wisp.toml (see wisp.toml.example)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="command", title="commands")
 
     for command in COMMANDS.values():
         command.register(subparsers)

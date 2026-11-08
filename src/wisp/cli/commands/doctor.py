@@ -16,9 +16,15 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "doctor",
         help="Check this machine for missing prerequisites",
         description=(
-            "Check this machine for missing prerequisites (daemon, WireGuard "
-            "tools, Pulumi, credentials, directories, etc.)."
+            "Run read-only diagnostic checks for everything Wisp depends on: "
+            "the daemon, WireGuard tools, Pulumi, per-provider credentials, "
+            "and runtime directories. Every check prints PASS, WARN, SKIP, or "
+            "FAIL with an actionable hint.\n\n"
+            "Never modifies the machine. Exits 1 only on FAIL; WARN and SKIP "
+            "exit 0."
         ),
+        epilog="Example:\n  wisp doctor\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     add_log_level(doctor_parser)
 

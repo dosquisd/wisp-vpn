@@ -18,7 +18,19 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     """
     parser = subparsers.add_parser(
         "regions",
-        help="List available regions",
+        help="List the regions the provider offers",
+        description=(
+            "Query the provider for the regions it currently offers and "
+            "print them as a JSON array. Uses the provider's own API: boto3 "
+            "for AWS, the Identity API for OCI, and the Compute SDK for GCP. "
+            "The 'vps' provider has no regions and returns a placeholder.\n\n"
+            "This only reads the provider's region catalog; it needs working "
+            "credentials but deploys nothing."
+        ),
+        epilog=(
+            "Examples:\n  wisp regions aws\n  wisp regions oci\n  wisp regions gcp\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     add_provider(parser)
 

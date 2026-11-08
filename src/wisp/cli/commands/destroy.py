@@ -28,7 +28,24 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     """
     parser = subparsers.add_parser(
         "destroy",
-        help="Destroy VMs",
+        help="Tear down the session's VM (or VPS config) and local artifacts",
+        description=(
+            "Disconnect the local client, destroy the provider's Pulumi stack "
+            "(cancelling any in-flight update first), and remove the local "
+            "SSH key and client config. With the 'vps' provider, also tear "
+            "the tunnel down on the server: every /etc/wireguard/wisp-*.conf "
+            "is brought down and deleted, and only the packages Wisp itself "
+            "installed are removed."
+        ),
+        epilog=(
+            "VPS connection details resolve in this order: flags, the "
+            "deploy-time marker, then [vps] in wisp.toml.\n\n"
+            "Examples:\n"
+            "  wisp destroy aws -r eu-west-1\n"
+            "  wisp destroy oci -r sa-bogota-1\n"
+            "  wisp destroy vps --host 203.0.113.10\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     add_provider(parser)
     add_log_level(parser)

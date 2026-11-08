@@ -15,7 +15,21 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     """
     subparsers.add_parser(
         "disconnect",
-        help="Disconnect the local WireGuard client from the remote VM",
+        help="Take the local WireGuard client down (local panic switch)",
+        description=(
+            "Immediately bring the local WireGuard client interface down "
+            "through the privileged daemon. Purely local: no cloud API calls, "
+            "no Pulumi state changes, no provider credentials.\n\n"
+            "Use this when a dead VM or an interrupted session left the "
+            "interface up and it is capturing your default route."
+        ),
+        epilog=(
+            "Example:\n"
+            "  wisp disconnect\n\n"
+            "This leaves the cloud resources running; use 'wisp destroy' to "
+            "stop billing.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
 
