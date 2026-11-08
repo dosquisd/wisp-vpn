@@ -8,6 +8,7 @@ subcommands. Both are dispatched from `wisp.main:main` (delegating to
 
 ```bash
 wisp            # no subcommand → launches the TUI
+wisp --version  # print the installed version (valid anywhere on the line)
 wisp deploy     # CLI: deploy a VM
 wisp destroy    # CLI: destroy VMs
 wisp connect    # CLI: reconnect local client to an active tunnel

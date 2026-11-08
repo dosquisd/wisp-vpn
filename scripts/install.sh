@@ -464,6 +464,9 @@ detect_wisp_version() {
     local tools_dir="${HOME}/.local/share/uv/tools" venv_py="" out=""
     if command -v wisp >/dev/null 2>&1; then
         out="$(wisp --version 2>/dev/null || true)"
+        # Accept both the bare version the metadata fallback prints and the
+        # "wisp <version>" form of the CLI flag.
+        out="${out#wisp }"
         if [[ -n "$out" ]]; then
             printf '%s' "$out"
             return 0

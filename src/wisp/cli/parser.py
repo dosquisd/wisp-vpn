@@ -1,11 +1,35 @@
 """Argument parsing and top-level CLI dispatch."""
 
 import argparse
+import sys
 
 from wisp.cli.args import CommandEnum, RuntimeArgs
 from wisp.cli.commands import COMMANDS
 from wisp.config.settings import ensure_user_config
 from wisp.providers import ProviderEnum
+from wisp.version import get_version
+
+
+def _print_version() -> None:
+    """Print the Wisp version line reported by ``--version``."""
+    print(f"wisp {get_version()}")
+
+
+class _VersionAction(argparse.Action):
+    """Print the version and exit, resolving it only when the flag is used."""
+
+    def __init__(self, option_strings: list[str], dest: str, **kwargs) -> None:
+        super().__init__(option_strings, dest, nargs=0, **kwargs)
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values,
+        option_string: str | None = None,
+    ) -> None:
+        _print_version()
+        parser.exit()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     for command in COMMANDS.values():
         command.register(subparsers)
+
+    parser.add_argument(
+        "--version",
+        action=_VersionAction,
+        help="show the installed version and exit",
+    )
 
     return parser
 
@@ -80,6 +110,13 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         int: Process exit code.
     """
+    raw_argv = sys.argv[1:] if argv is None else list(argv)
+    # --version wins wherever it appears, so `wisp deploy oci --version`
+    # reports the version instead of deploying anything.
+    if "--version" in raw_argv:
+        _print_version()
+        return 0
+
     args = parse_args(argv)
     command = args["command"]
 
