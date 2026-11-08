@@ -10,10 +10,12 @@ import time
 
 import pytest
 
-from wisp.cli import session_boot
-from wisp.cli.app import WispApp
-from wisp.cli.screens.main_menu import MainMenuScreen
-from wisp.cli.screens.tunnel import (
+from wisp.daemon.protocol import Response
+from wisp.session import ActiveSession
+from wisp.tui import session_boot
+from wisp.tui.app import WispApp
+from wisp.tui.screens.main_menu import MainMenuScreen
+from wisp.tui.screens.tunnel import (
     HEALTH_LIVE,
     HEALTH_LOCAL_DOWN,
     HEALTH_REMOTE_GONE,
@@ -21,8 +23,6 @@ from wisp.cli.screens.tunnel import (
     TunnelScreen,
     health_state,
 )
-from wisp.daemon.protocol import Response
-from wisp.session import ActiveSession
 
 
 class _Recorder:
@@ -131,7 +131,7 @@ async def test_adoption_refuses_a_marker_owned_by_a_live_process(
     wisp_app, monkeypatch
 ) -> None:
     """Never take over a tunnel another running Wisp process still owns."""
-    from wisp.cli import app as app_module
+    from wisp.tui import app as app_module
 
     monkeypatch.setattr(WispApp, "_offer_orphan_cleanup", lambda self: None)
     monkeypatch.setattr(app_module, "read_active_session", lambda: _marker(pid=1234))
@@ -150,7 +150,7 @@ async def test_adoption_refuses_when_the_local_interface_is_down(
 ) -> None:
     """A marker with no live interface is an orphan, not a tunnel to adopt."""
     import wisp.wireguard as wireguard_module
-    from wisp.cli import app as app_module
+    from wisp.tui import app as app_module
 
     monkeypatch.setattr(WispApp, "_offer_orphan_cleanup", lambda self: None)
     monkeypatch.setattr(app_module, "read_active_session", lambda: _marker())
@@ -170,7 +170,7 @@ async def test_adoption_refuses_when_the_local_interface_is_down(
 async def test_adoption_refuses_a_stale_handshake(wisp_app, monkeypatch) -> None:
     """A handshake older than the stale threshold is not a live tunnel."""
     import wisp.wireguard as wireguard_module
-    from wisp.cli import app as app_module
+    from wisp.tui import app as app_module
 
     monkeypatch.setattr(WispApp, "_offer_orphan_cleanup", lambda self: None)
     monkeypatch.setattr(app_module, "read_active_session", lambda: _marker())
@@ -192,7 +192,7 @@ async def test_adoption_refuses_a_stale_handshake(wisp_app, monkeypatch) -> None
 async def test_adoption_takes_over_a_live_tunnel(wisp_app, monkeypatch) -> None:
     """A dead owner plus a fresh handshake is exactly what adoption is for."""
     import wisp.wireguard as wireguard_module
-    from wisp.cli import app as app_module
+    from wisp.tui import app as app_module
 
     monkeypatch.setattr(WispApp, "_offer_orphan_cleanup", lambda self: None)
     monkeypatch.setattr(app_module, "read_active_session", lambda: _marker(pid=424_242))
@@ -225,7 +225,7 @@ async def test_orphan_warning_is_skipped_when_the_session_can_be_adopted(
     destroy the very session that is about to be shown as running.
     """
     import wisp.wireguard as wireguard_module
-    from wisp.cli import app as app_module
+    from wisp.tui import app as app_module
 
     marker = _marker(pid=424_242)
     monkeypatch.setattr(app_module, "find_orphaned_session", lambda: marker)
@@ -259,7 +259,7 @@ async def test_orphan_warning_becomes_a_state_unknown_notice_without_handshake_a
     user to delete a working session.
     """
     import wisp.wireguard as wireguard_module
-    from wisp.cli import app as app_module
+    from wisp.tui import app as app_module
 
     marker = _marker(pid=424_242)
     monkeypatch.setattr(app_module, "find_orphaned_session", lambda: marker)
@@ -291,7 +291,7 @@ async def test_orphan_warning_still_fires_when_the_tunnel_is_gone(
 ) -> None:
     """Without a live tunnel the warning is the whole point: resources may bill."""
     import wisp.wireguard as wireguard_module
-    from wisp.cli import app as app_module
+    from wisp.tui import app as app_module
 
     marker = _marker(pid=424_242)
     monkeypatch.setattr(app_module, "find_orphaned_session", lambda: marker)
@@ -332,7 +332,7 @@ def test_read_endpoint_handles_missing_and_present_config(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An adopted view reads the endpoint from the config, or admits it is unknown."""
-    from wisp.cli.screens import tunnel as tunnel_module
+    from wisp.tui.screens import tunnel as tunnel_module
 
     missing = tmp_path / "wg0.conf"
     monkeypatch.setattr(tunnel_module, "WIREGUARD_CLIENT_CONF_PATH", missing)

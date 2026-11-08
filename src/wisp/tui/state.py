@@ -30,7 +30,7 @@ def _default_region_for_default_provider() -> str:
 
 @dataclass
 class AppState:
-    """Mutable per-session state held by :class:`~wisp.cli.app.WispApp`.
+    """Mutable per-session state held by :class:`~wisp.tui.app.WispApp`.
 
     Attributes:
         config (WispConfig): The active session configuration (loaded from the

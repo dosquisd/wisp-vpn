@@ -8,8 +8,8 @@ disabled, and persist "no volver a preguntar". ``request_shutdown`` and
 
 from textual.widgets import Switch
 
-from wisp.cli.screens.modal import ConfirmDestroyScreen
-from wisp.cli.screens.tunnel import TunnelScreen
+from wisp.tui.screens.modal import ConfirmDestroyScreen
+from wisp.tui.screens.tunnel import TunnelScreen
 
 
 async def _open_tunnel(pilot, app) -> None:
@@ -32,11 +32,11 @@ def _stub_shutdown(monkeypatch):
         calls.append((app, reason))
 
     monkeypatch.setattr(
-        "wisp.cli.screens.shutdown.request_shutdown",
+        "wisp.tui.screens.shutdown.request_shutdown",
         helper,
     )
     monkeypatch.setattr(
-        "wisp.cli.screens.tunnel.request_shutdown",
+        "wisp.tui.screens.tunnel.request_shutdown",
         helper,
     )
     return calls
@@ -45,7 +45,7 @@ def _stub_shutdown(monkeypatch):
 def _stub_save(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "wisp.cli.screens.shutdown.save_session_config",
+        "wisp.tui.screens.shutdown.save_session_config",
         lambda *a, **k: calls.append(a),
     )
     return calls
@@ -132,7 +132,7 @@ def _arm_guard(app) -> None:
 def _stub_real_request_shutdown(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "wisp.cli.screens.shutdown.request_shutdown",
+        "wisp.tui.screens.shutdown.request_shutdown",
         lambda app, reason: calls.append((app, reason)),
     )
     return calls

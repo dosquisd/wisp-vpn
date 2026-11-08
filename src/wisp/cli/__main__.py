@@ -1,12 +1,8 @@
-from wisp.cli.app import WispApp
-from wisp.config.settings import ensure_user_config
+"""Wisp CLI module entry point."""
 
+import sys
 
-def main() -> None:
-    ensure_user_config()
-    app = WispApp()
-    app.run()
-
+from wisp.cli.parser import main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

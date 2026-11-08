@@ -36,7 +36,7 @@ def arm_session_guard(
     ``atexit`` and adoption all share one teardown.
 
     Args:
-        app: The running :class:`~wisp.cli.app.WispApp`.
+        app: The running :class:`~wisp.tui.app.WispApp`.
         provider (str): Provider name owning the session.
         region (str): Region the resources live in.
         ttl_minutes (int): Session TTL in minutes; ``0`` disables the OS one-shot.

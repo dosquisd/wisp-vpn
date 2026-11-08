@@ -18,9 +18,9 @@ from textual.app import ComposeResult
 from textual.containers import CenterMiddle, Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Static
 
-from wisp.cli.screens.base import WispScreen
-from wisp.cli.screens.shutdown import ShutdownScreen
 from wisp.session import ActiveSession
+from wisp.tui.screens.base import WispScreen
+from wisp.tui.screens.shutdown import ShutdownScreen
 from wisp.utils import logger
 from wisp.utils.operations import read_teardown_notice
 

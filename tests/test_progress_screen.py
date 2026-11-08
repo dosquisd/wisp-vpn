@@ -4,8 +4,8 @@ through ``request_shutdown`` (the armed session guard) — never straight to
 ``delete_vm``. The deploy worker is stubbed so mounting the screen is safe.
 """
 
-from wisp.cli.screens.modal import ConfirmDestroyScreen
-from wisp.cli.screens.progress import ProgressScreen
+from wisp.tui.screens.modal import ConfirmDestroyScreen
+from wisp.tui.screens.progress import ProgressScreen
 
 
 def _stub_deploy(monkeypatch) -> None:
@@ -19,11 +19,11 @@ def _stub_shutdown(monkeypatch):
         calls.append((app, reason))
 
     monkeypatch.setattr(
-        "wisp.cli.screens.shutdown.request_shutdown",
+        "wisp.tui.screens.shutdown.request_shutdown",
         helper,
     )
     monkeypatch.setattr(
-        "wisp.cli.screens.progress.request_shutdown",
+        "wisp.tui.screens.progress.request_shutdown",
         helper,
     )
     return calls

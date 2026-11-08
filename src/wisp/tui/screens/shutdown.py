@@ -21,9 +21,9 @@ from textual.binding import Binding
 from textual.containers import Center, CenterMiddle, Vertical
 from textual.widgets import Footer, Header, ProgressBar, Static
 
-from wisp.cli.screens.base import WispScreen
 from wisp.config.settings import save_session_config
 from wisp.session import ActiveSession, teardown_active_session
+from wisp.tui.screens.base import WispScreen
 from wisp.utils import logger
 
 
@@ -261,7 +261,7 @@ def request_shutdown(app, reason: str) -> None:
     shutdown screen, which owns the actual teardown.
 
     Args:
-        app: The running :class:`~wisp.cli.app.WispApp`.
+        app: The running :class:`~wisp.tui.app.WispApp`.
         reason (str): Short explanation of why the shutdown was requested.
     """
     try:
@@ -281,7 +281,7 @@ def confirmed_destroy(app, choice: tuple[bool, bool] | None, reason: str) -> boo
     :func:`request_shutdown` so every destroy trigger shares the same guard.
 
     Args:
-        app: The running :class:`~wisp.cli.app.WispApp`.
+        app: The running :class:`~wisp.tui.app.WispApp`.
         choice: The modal's result, ``(confirmed, no_ask)`` or ``None``.
         reason (str): Reason forwarded to ``request_shutdown``.
 

@@ -25,17 +25,17 @@ from textual.binding import Binding
 from textual.containers import CenterMiddle, Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Static
 
-from wisp.cli.screens.base import WispScreen
-from wisp.cli.screens.modal import ConfirmDestroyScreen
-from wisp.cli.screens.session_ended import (
-    ExternalTeardownScreen,
-    SessionEndedScreen,
-)
-from wisp.cli.screens.shutdown import confirmed_destroy, request_shutdown
 from wisp.config.constants import WIREGUARD_CLIENT_CONF_PATH
 from wisp.daemon.server import STALE_TUNNEL_SECONDS
 from wisp.providers.base import get_provider_display_name
 from wisp.session import ActiveSession, read_active_session
+from wisp.tui.screens.base import WispScreen
+from wisp.tui.screens.modal import ConfirmDestroyScreen
+from wisp.tui.screens.session_ended import (
+    ExternalTeardownScreen,
+    SessionEndedScreen,
+)
+from wisp.tui.screens.shutdown import confirmed_destroy, request_shutdown
 from wisp.utils import logger
 from wisp.utils.operations import read_teardown_notice
 

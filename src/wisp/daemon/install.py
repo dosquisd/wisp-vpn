@@ -27,7 +27,7 @@ Provides the ``wisp daemon install`` / ``wisp daemon uninstall`` commands:
   service.
 - Any other platform: a clear "not supported" error.
 
-This module is imported lazily by ``wisp.main``: importing anything from the
+This module is imported lazily by ``wisp.cli.commands.daemon``: importing anything from the
 ``wisp.daemon`` package sets the process-local ``WISP_DAEMON=1`` marker, which
 would flip the CLI logger to the daemon's stderr-only sink for every command.
 """
@@ -485,6 +485,7 @@ def _is_windows_admin() -> bool:
 
 def _relaunch_windows_elevated() -> int:
     """Re-run ``daemon install`` through the Windows UAC prompt."""
+
     def quote_ps(value: object) -> str:
         return "'" + str(value).replace("'", "''") + "'"
 
@@ -510,9 +511,7 @@ def _relaunch_windows_elevated() -> int:
         "exit 1 "
         "}"
     )
-    inner_encoded = base64.b64encode(
-        inner_command.encode("utf-16le")
-    ).decode("ascii")
+    inner_encoded = base64.b64encode(inner_command.encode("utf-16le")).decode("ascii")
     outer_command = (
         "$ErrorActionPreference = 'Stop'; "
         "try { "
@@ -525,9 +524,7 @@ def _relaunch_windows_elevated() -> int:
         "exit 1 "
         "}"
     )
-    outer_encoded = base64.b64encode(
-        outer_command.encode("utf-16le")
-    ).decode("ascii")
+    outer_encoded = base64.b64encode(outer_command.encode("utf-16le")).decode("ascii")
     try:
         result = subprocess.run(
             [
@@ -599,9 +596,7 @@ def _prepare_windows_service_runtime() -> bool:
             shutil.copy2(host_source, host_destination)
         for dll in runtime_dlls:
             destination = venv_dir / dll.name
-            if destination.is_file() and filecmp.cmp(
-                dll, destination, shallow=False
-            ):
+            if destination.is_file() and filecmp.cmp(dll, destination, shallow=False):
                 continue
             try:
                 shutil.copy2(dll, destination)
@@ -635,9 +630,7 @@ def _ensure_windows_group() -> bool:
     current_user = _run(["whoami"])
     user = current_user.stdout.strip()
     if current_user.returncode != 0 or not user:
-        _print_stderr(
-            "Could not determine the current Windows user for group setup."
-        )
+        _print_stderr("Could not determine the current Windows user for group setup.")
         return False
 
     members = _run(["net", "localgroup", WISP_GROUP])
@@ -687,9 +680,7 @@ def _configure_windows_service_environment() -> bool:
         )
         try:
             service_path = ";".join(
-                part
-                for part in (sys.base_prefix, machine_path)
-                if part
+                part for part in (sys.base_prefix, machine_path) if part
             )
             winreg.SetValueEx(
                 service_key,
@@ -702,8 +693,7 @@ def _configure_windows_service_environment() -> bool:
             winreg.CloseKey(service_key)
     except (ImportError, OSError, TypeError) as exc:
         _print_stderr(
-            "Could not configure the Wisp service runtime environment: "
-            f"{exc}"
+            f"Could not configure the Wisp service runtime environment: {exc}"
         )
         return False
     return True
@@ -994,9 +984,7 @@ def _install_windows() -> int:
 
     service_command = [sys.executable, "-m", "wisp.daemon.windows_service"]
     _run([*service_command, "remove"], ignore_failure=True)
-    install_result = _run(
-        [*service_command, "install"]
-    )
+    install_result = _run([*service_command, "install"])
     if install_result.returncode != 0:
         _print_stderr(
             "Could not install the Wisp Windows service. Run the command "
@@ -1021,9 +1009,10 @@ def _install_windows() -> int:
     if not _configure_windows_service_environment():
         return 1
     start_result = _run(["sc.exe", "start", "WispService"])
-    if start_result.returncode != 0 and "already running" not in (
-        start_result.stderr + start_result.stdout
-    ).lower():
+    if (
+        start_result.returncode != 0
+        and "already running" not in (start_result.stderr + start_result.stdout).lower()
+    ):
         _print_stderr(
             "Could not start the Wisp Windows service. Detail: "
             f"{start_result.stderr.strip() or start_result.stdout.strip() or 'unknown error'}"

@@ -46,7 +46,7 @@ async def test_deploy_card_is_content_sized_and_centered(wisp_app):
 
 async def test_deploy_card_height_is_stable_when_selects_focus(wisp_app, monkeypatch):
     """Focusing either Select must not resize the deployment card."""
-    from wisp.cli.screens.deploy import DeployScreen
+    from wisp.tui.screens.deploy import DeployScreen
 
     monkeypatch.setattr(DeployScreen, "fetch_live_regions", lambda self: None)
     async with wisp_app.run_test(size=(100, 45)) as pilot:
@@ -68,7 +68,7 @@ async def test_deploy_card_height_is_stable_when_selects_focus(wisp_app, monkeyp
 
 async def test_confirm_discard_modal_is_content_sized_and_centered(wisp_app):
     """The shared modal card should stay compact and centered."""
-    from wisp.cli.screens.modal import ConfirmDiscardScreen
+    from wisp.tui.screens.modal import ConfirmDiscardScreen
 
     async with wisp_app.run_test(size=(100, 45)) as pilot:
         await pilot.pause()
@@ -84,7 +84,7 @@ async def test_progress_card_fits_even_with_error(wisp_app):
     """The progress card must not scroll, including after a failed deploy."""
     async with wisp_app.run_test(size=(100, 24)) as pilot:
         await pilot.pause()
-        from wisp.cli.screens.progress import ProgressScreen
+        from wisp.tui.screens.progress import ProgressScreen
 
         screen = ProgressScreen()
         wisp_app.push_screen(screen)
@@ -103,7 +103,7 @@ async def test_progress_bar_is_centered(wisp_app):
     """The ProgressBar must sit in the middle of the card content, not hug the left."""
     async with wisp_app.run_test(size=(100, 40)) as pilot:
         await pilot.pause()
-        from wisp.cli.screens.progress import ProgressScreen
+        from wisp.tui.screens.progress import ProgressScreen
 
         screen = ProgressScreen()
         wisp_app.push_screen(screen)
@@ -129,7 +129,7 @@ async def test_progress_bar_is_centered(wisp_app):
 
 async def test_shutdown_progress_bar_is_centered_and_fits(wisp_app):
     """The shutdown ProgressBar should stay centered within the card content."""
-    from wisp.cli.screens.shutdown import ShutdownScreen
+    from wisp.tui.screens.shutdown import ShutdownScreen
 
     async with wisp_app.run_test(size=(100, 40)) as pilot:
         await pilot.pause()
@@ -152,8 +152,8 @@ async def test_shutdown_progress_bar_is_centered_and_fits(wisp_app):
 
 async def test_shutdown_returns_to_main_menu(wisp_app):
     """Completed teardown should return to the menu instead of exiting the app."""
-    from wisp.cli.screens import MainMenuScreen
-    from wisp.cli.screens.shutdown import ShutdownScreen
+    from wisp.tui.screens import MainMenuScreen
+    from wisp.tui.screens.shutdown import ShutdownScreen
 
     async with wisp_app.run_test(size=(100, 40)) as pilot:
         await pilot.pause()

@@ -23,7 +23,7 @@ class _ConfirmModal(ModalScreen):
     """Shared chrome for the question boxes: dimmed backdrop + centred card.
 
     The arrow keys navigate between the modal's focusable widgets (Up/Down and
-    Left/Right both cycle, like :class:`~wisp.cli.screens.base.WispScreen`),
+    Left/Right both cycle, like :class:`~wisp.tui.screens.base.WispScreen`),
     so keyboard-only users never depend on Tab. The modal contents are only
     buttons/one switch, so nothing here needs the arrow keys for itself.
     """

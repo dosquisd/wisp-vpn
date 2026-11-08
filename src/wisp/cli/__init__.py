@@ -1,3 +1,1 @@
-from wisp.cli.app import WispApp
-
-__all__ = ["WispApp"]
+"""Non-interactive command-line interface for Wisp."""

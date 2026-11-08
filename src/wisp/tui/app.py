@@ -6,17 +6,6 @@ import time
 from textual.app import App
 from textual.binding import Binding
 
-from wisp.cli.screens import ConfigScreen, DeployScreen, MainMenuScreen, TunnelScreen
-from wisp.cli.screens.modal import ConfirmDestroyScreen
-from wisp.cli.screens.shutdown import confirmed_destroy, request_shutdown
-from wisp.cli.screens.tunnel import (
-    HEALTH_LIVE,
-    HEALTH_LOCAL_DOWN,
-    HEALTH_WAITING,
-    health_state,
-)
-from wisp.cli.session_boot import arm_session_guard
-from wisp.cli.state import AppState
 from wisp.session import (
     ActiveSession,
     find_orphaned_session,
@@ -25,13 +14,24 @@ from wisp.session import (
     read_active_session,
     register_atexit,
 )
+from wisp.tui.screens import ConfigScreen, DeployScreen, MainMenuScreen, TunnelScreen
+from wisp.tui.screens.modal import ConfirmDestroyScreen
+from wisp.tui.screens.shutdown import confirmed_destroy, request_shutdown
+from wisp.tui.screens.tunnel import (
+    HEALTH_LIVE,
+    HEALTH_LOCAL_DOWN,
+    HEALTH_WAITING,
+    health_state,
+)
+from wisp.tui.session_boot import arm_session_guard
+from wisp.tui.state import AppState
 from wisp.utils.privileges import root_invocation
 
 
 class WispApp(App):
     """The Wisp terminal UI application.
 
-    Owns the shared :class:`~wisp.cli.state.AppState`, defines global CSS and
+    Owns the shared :class:`~wisp.tui.state.AppState`, defines global CSS and
     key bindings, and installs the main-menu, config, and deploy screens on
     mount.
     """
@@ -307,7 +307,7 @@ class WispApp(App):
     def _adoption_health(self, session: ActiveSession) -> str | None:
         """Classify how alive a leftover session is, for the startup decisions.
 
-        :func:`~wisp.cli.screens.tunnel.health_state` is the single source of
+        :func:`~wisp.tui.screens.tunnel.health_state` is the single source of
         truth for "is this tunnel real", so the menu and the tunnel view cannot
         disagree about the same evidence. The only extra rule is ownership: a
         marker whose process is still running is not ours to judge.

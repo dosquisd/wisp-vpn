@@ -33,8 +33,8 @@ for _var, _sub in (
 
 import pytest  # noqa: E402
 
-from wisp.cli.app import WispApp  # noqa: E402
-from wisp.cli.screens import ConfigScreen, DeployScreen, MainMenuScreen  # noqa: E402
+from wisp.tui.app import WispApp  # noqa: E402
+from wisp.tui.screens import ConfigScreen, DeployScreen, MainMenuScreen  # noqa: E402
 
 SCREENS = {
     "main_menu": MainMenuScreen,

@@ -5,9 +5,9 @@ from textual.binding import Binding
 from textual.containers import CenterMiddle, Vertical
 from textual.widgets import Button, Footer, Header, Static
 
-from wisp.cli.screens.base import WispScreen
-from wisp.cli.screens.shutdown import ShutdownScreen
 from wisp.session import find_orphaned_session
+from wisp.tui.screens.base import WispScreen
+from wisp.tui.screens.shutdown import ShutdownScreen
 
 
 class MainMenuScreen(WispScreen):

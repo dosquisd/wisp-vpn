@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 import wisp.doctor as doctor
+from wisp.cli.args import CommandEnum
+from wisp.cli.parser import parse_args
 from wisp.daemon.protocol import Response
 from wisp.doctor import (
     Check,
@@ -28,7 +30,6 @@ from wisp.doctor import (
     run_doctor,
     run_doctor_command,
 )
-from wisp.main import CommandEnum, parse_args
 from wisp.session import ActiveSession
 
 

@@ -14,6 +14,8 @@ from urllib.parse import quote
 
 import pytest
 
+from wisp.cli.args import CommandEnum
+from wisp.cli.parser import parse_args
 from wisp.daemon import install as daemon_install
 from wisp.daemon.install import (
     install_daemon,
@@ -21,7 +23,6 @@ from wisp.daemon.install import (
     render_service_unit,
     uninstall_daemon,
 )
-from wisp.main import CommandEnum, parse_args
 from wisp.utils import PlatformEnum, privileges
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

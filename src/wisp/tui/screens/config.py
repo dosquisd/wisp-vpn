@@ -16,9 +16,9 @@ from textual.widgets import (
     Switch,
 )
 
-from wisp.cli.screens.base import WispScreen
-from wisp.cli.screens.modal import ConfirmActionScreen, ConfirmDiscardScreen
 from wisp.config.settings import describe_config_sources, save_session_config
+from wisp.tui.screens.base import WispScreen
+from wisp.tui.screens.modal import ConfirmActionScreen, ConfirmDiscardScreen
 
 
 def _mask(value: str, keep: int = 4) -> str:

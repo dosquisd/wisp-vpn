@@ -7,8 +7,8 @@ discovering it afterwards leaves a billable VM with nothing attached to it.
 
 from textual.widgets import Select, Switch
 
-from wisp.cli.screens import DeployScreen, ProgressScreen
-from wisp.cli.screens import deploy as deploy_module
+from wisp.tui.screens import DeployScreen, ProgressScreen
+from wisp.tui.screens import deploy as deploy_module
 
 
 async def _open_deploy(pilot, app) -> None:

@@ -15,7 +15,9 @@ import sys
 
 import pytest
 
-from wisp.main import CommandEnum, ProviderEnum, parse_args
+from wisp.cli.args import CommandEnum
+from wisp.cli.parser import parse_args
+from wisp.providers import ProviderEnum
 from wisp.utils import watchdog as watchdog_module
 from wisp.utils.platform import PlatformEnum
 from wisp.utils.pulumi import describe_pulumi_error

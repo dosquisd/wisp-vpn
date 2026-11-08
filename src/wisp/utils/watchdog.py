@@ -124,7 +124,7 @@ def _wisp_destroy_command(provider: str, region: str) -> list[str]:
     # seed sys.argv so argparse sees the same subcommand invocation.
     bootstrap = (
         f"import sys; sys.argv = {['wisp', *argv]!r}; "
-        "from wisp.main import main; main()"
+        "from wisp.main import main; sys.exit(main())"
     )
     return [sys.executable, "-c", bootstrap]
 

@@ -8,8 +8,8 @@ away, and leaving (or resetting) dirty must ask before discarding anything.
 
 from textual.widgets import Button, Input, Static
 
-from wisp.cli.screens import ConfigScreen, MainMenuScreen
-from wisp.cli.screens.modal import ConfirmActionScreen, ConfirmDiscardScreen
+from wisp.tui.screens import ConfigScreen, MainMenuScreen
+from wisp.tui.screens.modal import ConfirmActionScreen, ConfirmDiscardScreen
 
 
 async def _open_config(pilot, app) -> None:
@@ -82,7 +82,7 @@ async def test_discard_from_back_reverts_and_pops(wisp_app):
 
 async def test_save_from_modal_persists_and_pops(wisp_app, monkeypatch):
     monkeypatch.setattr(
-        "wisp.cli.screens.config.save_session_config",
+        "wisp.tui.screens.config.save_session_config",
         lambda *a, **k: "/tmp/wisp-test.toml",
     )
     async with wisp_app.run_test(size=(100, 45)) as pilot:
@@ -146,7 +146,7 @@ async def test_save_button_asks_first(wisp_app):
 
 async def test_save_confirmed_persists_and_pops(wisp_app, monkeypatch):
     monkeypatch.setattr(
-        "wisp.cli.screens.config.save_session_config",
+        "wisp.tui.screens.config.save_session_config",
         lambda *a, **k: "/tmp/wisp-test.toml",
     )
     async with wisp_app.run_test(size=(100, 45)) as pilot:
@@ -185,7 +185,7 @@ async def test_reset_clean_notifies_and_skips_modal(wisp_app):
 
 async def test_arrows_move_focus_inside_confirm_modals(wisp_app, monkeypatch):
     monkeypatch.setattr(
-        "wisp.cli.screens.config.save_session_config",
+        "wisp.tui.screens.config.save_session_config",
         lambda *a, **k: "/tmp/wisp-test.toml",
     )
     async with wisp_app.run_test(size=(100, 45)) as pilot:

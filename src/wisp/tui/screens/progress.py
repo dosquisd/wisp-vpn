@@ -6,13 +6,13 @@ from textual.binding import Binding
 from textual.containers import Center, Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, ProgressBar, Static
 
-from wisp.cli.screens.base import WispScreen
-from wisp.cli.screens.modal import ConfirmDestroyScreen
-from wisp.cli.screens.shutdown import confirmed_destroy, request_shutdown
-from wisp.cli.screens.tunnel import TunnelScreen
-from wisp.cli.session_boot import arm_session_guard
 from wisp.providers import PROVIDERS_MAP, ProviderEnum
 from wisp.providers.base import DeployVMResult, get_provider_display_name
+from wisp.tui.screens.base import WispScreen
+from wisp.tui.screens.modal import ConfirmDestroyScreen
+from wisp.tui.screens.shutdown import confirmed_destroy, request_shutdown
+from wisp.tui.screens.tunnel import TunnelScreen
+from wisp.tui.session_boot import arm_session_guard
 from wisp.utils.pulumi import describe_pulumi_error
 
 
@@ -257,7 +257,7 @@ class ProgressScreen(WispScreen):
         the tunnel and the cloud resources. The guard is idempotent: whichever
         trigger fires first performs the teardown and the rest are no-ops.
 
-        The teardown itself lives in :func:`wisp.cli.session_boot.arm_session_guard`
+        The teardown itself lives in :func:`wisp.tui.session_boot.arm_session_guard`
         so the deploy flow and startup adoption cannot build it differently. It
         references only the app, never ``self``: by the time it runs this screen
         has usually been swapped for the tunnel view, and a closure over a

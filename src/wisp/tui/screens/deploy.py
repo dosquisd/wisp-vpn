@@ -6,12 +6,12 @@ from textual.binding import Binding
 from textual.containers import CenterMiddle, Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Input, Label, Select, Static, Switch
 
-from wisp.cli.screens.base import WispScreen
-from wisp.cli.screens.progress import ProgressScreen
 from wisp.config.settings import get_default_region_for
 from wisp.providers import PROVIDERS_MAP, ProviderEnum
 from wisp.providers.base import get_provider_display_name
 from wisp.providers.vps import VPS_PLACEHOLDER_REGION
+from wisp.tui.screens.base import WispScreen
+from wisp.tui.screens.progress import ProgressScreen
 from wisp.wireguard import tunnel_conflict
 
 # Static region list used until live AWS regions are fetched (or if that fails).
