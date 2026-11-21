@@ -144,6 +144,50 @@ Get-WinEvent -LogName System -MaxEvents 30 |
 the `LocalSystem` account. Re-run the installer from an elevated PowerShell
 after correcting any service/runtime error shown in those logs.
 
+### Windows error 1058: WispService is disabled
+
+If `wisp daemon install` fails while starting `WispService` with Windows
+error 1058, the service is disabled in its current startup configuration. This
+does not identify what changed that configuration. In an elevated PowerShell,
+inspect it with `sc.exe` (not `sc`, which may resolve to a PowerShell alias):
+
+```powershell
+sc.exe qc WispService
+```
+
+If the output says `START_TYPE : 4 DISABLED`, set it to automatic and start the
+service:
+
+```powershell
+sc.exe config WispService start= auto
+sc.exe start WispService
+```
+
+Keep the space after `start=`; it is required by `sc.exe`. Check the service
+state, waiting briefly and querying again if it is still starting:
+
+```powershell
+sc.exe query WispService
+```
+
+The expected state is `RUNNING`. You can also run `wisp doctor` to check Wisp's
+daemon connectivity and other diagnostics; it may report unrelated issues.
+Restarting Windows is not required for every error 1058 and does not, by
+itself, re-enable a disabled service.
+
+After a recent reinstall or uninstall, first close Services (`services.msc`)
+and any other service-management tools. If Windows still has a pending service
+removal or replacement, or troubleshooting remains stuck, save your work and
+restart Windows. Then open an elevated PowerShell again, run `wisp daemon install`
+if the service needs to be recreated, and check its state again. If the service
+still cannot start, collect the output of `sc.exe qc WispService`, the
+`sc.exe start WispService` output, and the latest `sc.exe query WispService`
+state for troubleshooting rather than repeating the same steps.
+
+See Microsoft's guidance for [Windows error 1058](https://learn.microsoft.com/en-us/troubleshoot/windows-client/performance/error-1058-displayed-when-service-stops),
+[`sc.exe config`](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/sc-config),
+and [service removal behavior](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-deleteservice).
+
 ### `sudo wisp daemon install` says `command not found`
 
 `sudo` does not inherit your `PATH`; it resets it to its own `secure_path`
