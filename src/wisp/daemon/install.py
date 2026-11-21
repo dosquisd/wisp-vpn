@@ -40,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from importlib import metadata
 from importlib.resources import files
@@ -47,6 +48,7 @@ from pathlib import Path
 from typing import Iterator
 from urllib.parse import unquote, urlparse
 
+from wisp.config.constants import WINDOWS_SERVICE_NAME
 from wisp.utils import PlatformEnum, logger
 from wisp.utils.privileges import root_invocation
 
@@ -590,6 +592,9 @@ def _prepare_windows_service_runtime() -> bool:
 
     runtime_dlls = list(dll_dir.glob("*.dll"))
     runtime_dlls.extend(Path(sys.base_prefix).glob("python*.dll"))
+    # A clean Windows installation may have no system-wide VC++ runtime.
+    # The managed Python already bundles the runtime required by the host.
+    runtime_dlls.extend(Path(sys.base_prefix).glob("vcruntime*.dll"))
 
     try:
         if not (
@@ -968,6 +973,72 @@ def _uninstall_linux() -> int:
     return 0
 
 
+def _probe_windows_daemon(timeout: float) -> None:
+    """Retry read-only status requests until the daemon replies or time expires.
+
+    Args:
+        timeout: Maximum retry time in seconds. The parent process also bounds
+            blocked pipe reads by terminating this disposable probe process.
+
+    Raises:
+        Exception: The last status failure when the retry time expires.
+    """
+    from wisp.wireguard.local_client import status_wireguard_client
+
+    deadline = time.monotonic() + timeout
+    last_error = None
+    while True:
+        try:
+            status_wireguard_client()
+            return
+        except Exception as exc:
+            if str(exc) != last_error:
+                last_error = str(exc)
+                _print_stderr(f"Daemon status probe: {exc}")
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
+
+
+def _wait_for_windows_daemon(timeout: float = 30.0) -> bool:
+    """Require a Named Pipe response before reporting installation success.
+
+    Args:
+        timeout: Maximum time in seconds, including blocked reads and imports.
+
+    Returns:
+        bool: True if a status request received a decoded response.
+    """
+    print(f"Waiting up to {timeout:g}s for the Wisp daemon to answer.")
+    command = [
+        sys.executable,
+        "-c",
+        "from wisp.daemon.install import _probe_windows_daemon; "
+        f"_probe_windows_daemon({timeout!r})",
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=False, timeout=timeout
+        )
+        if result.returncode == 0:
+            return True
+        detail = result.stderr.strip() or result.stdout.strip()
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stderr or b""
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        detail = f"No response within {timeout:g}s. {output.strip()}"
+    except OSError as exc:
+        detail = str(exc)
+    _print_stderr(
+        f"{WINDOWS_SERVICE_NAME} was registered, but the daemon did not become "
+        f"reachable on \\\\.\\pipe\\wisp. {detail}\n"
+        "Inspect $env:ProgramData\\wisp\\logs\\service-startup.log, wisp.log "
+        "and the Application event log."
+    )
+    return False
+
+
 def _install_windows() -> int:
     """Install the Windows service via the pywin32 wrapper.
 
@@ -1011,15 +1082,14 @@ def _install_windows() -> int:
         return 1
     if not _configure_windows_service_environment():
         return 1
-    start_result = _run(["sc.exe", "start", "WispService"])
-    if (
-        start_result.returncode != 0
-        and "already running" not in (start_result.stderr + start_result.stdout).lower()
-    ):
+    start_result = _run(["sc.exe", "start", WINDOWS_SERVICE_NAME])
+    if start_result.returncode != 0 and start_result.returncode != 1056:
         _print_stderr(
             "Could not start the Wisp Windows service. Detail: "
             f"{start_result.stderr.strip() or start_result.stdout.strip() or 'unknown error'}"
         )
+        return 1
+    if not _wait_for_windows_daemon():
         return 1
     print("Wisp daemon service installed (startup: automatic).")
     return 0

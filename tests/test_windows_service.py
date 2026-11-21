@@ -1,6 +1,7 @@
 """Tests for the Windows service wrapper's startup behavior."""
 
 import ast
+import builtins
 import json
 import os
 import runpy
@@ -32,7 +33,7 @@ def test_daemon_imports_are_deferred_until_after_service_running() -> None:
     )
     import_indexes = [
         index
-        for index, node in enumerate(svc_run.body)
+        for index, node in enumerate(ast.walk(svc_run))
         if isinstance(node, ast.ImportFrom)
         and node.module in {"wisp.daemon.server", "wisp.daemon.transport"}
     ]
@@ -145,3 +146,56 @@ def test_service_registration_uses_importable_class_and_scripts_host(
     service_class, class_string = registrations[0]
     assert class_string == "wisp.daemon.windows_service.WispService"
     assert Path(service_class._exe_name_) == tmp_path / "Scripts" / "pythonservice.exe"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows service wrapper")
+@pytest.mark.parametrize("failure_at", ["import", "transport", "serve"])
+def test_service_failure_preserves_traceback_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_at: str
+) -> None:
+    """Preserve failures before and after event-loop creation without using SCM."""
+    import servicemanager
+
+    from wisp.daemon import server, transport
+
+    events = []
+    monkeypatch.setenv("WISP_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(servicemanager, "LogInfoMsg", lambda message: None)
+    monkeypatch.setattr(servicemanager, "LogErrorMsg", events.append)
+    module = runpy.run_path(str(SERVICE_FILE))
+    cls = module["WispService"]
+    service = cls.__new__(cls)
+    service._loop = service._main_task = service._transport = None
+
+    if failure_at == "import":
+        original_import = builtins.__import__
+
+        def fail_import(name, *args, **kwargs):
+            if name == "wisp.daemon.server":
+                raise ImportError("injected startup failure")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fail_import)
+    elif failure_at == "transport":
+
+        def fail_transport():
+            raise RuntimeError("injected startup failure")
+
+        monkeypatch.setattr(transport, "WindowsNamedPipeTransport", fail_transport)
+    else:
+
+        async def fail_main(transport):
+            raise RuntimeError("injected startup failure")
+
+        monkeypatch.setattr(server, "main", fail_main)
+
+    with pytest.raises((ImportError, RuntimeError), match="injected startup failure"):
+        service.SvcDoRun()
+
+    assert service._loop is None
+    assert service._transport is None
+    assert service._main_task is None
+    log = (tmp_path / "service-startup.log").read_text(encoding="utf-8")
+    assert "Traceback (most recent call last)" in log
+    assert "injected startup failure" in log
+    assert "injected startup failure" in events[0]

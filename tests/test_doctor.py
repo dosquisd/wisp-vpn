@@ -226,7 +226,7 @@ def test_daemon_windows_service_missing(monkeypatch: pytest.MonkeyPatch) -> None
     c = check_daemon()
     assert c.status == CheckStatus.FAIL
     assert "not installed" in c.detail
-    assert "setup.ps1" in c.hint
+    assert "daemon install" in c.hint
 
 
 def test_daemon_windows_service_present_probe_ok(
@@ -251,6 +251,47 @@ def test_daemon_windows_service_present_probe_ok(
     c = check_daemon()
     assert c.status == CheckStatus.OK
     assert "running" in c.detail
+
+
+@pytest.mark.parametrize("error_code", [2, 3, 5])
+def test_daemon_windows_pipe_failure_has_actionable_hint(
+    monkeypatch: pytest.MonkeyPatch, error_code: int
+) -> None:
+    monkeypatch.setattr(doctor, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="SERVICE_NAME: WispService", stderr=""
+        ),
+    )
+
+    def fail_probe():
+        error = OSError("CreateFile failed")
+        error.winerror = error_code
+        raise error
+
+    monkeypatch.setattr(doctor, "status_wireguard_client", fail_probe)
+    check = check_daemon()
+    assert check.status == CheckStatus.FAIL
+    assert ("missing" if error_code in (2, 3) else "access denied") in check.detail
+    assert "service-startup.log" in check.hint
+
+
+def test_windows_service_name_does_not_import_service_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A read-only check must not run the wrapper's file-creation code."""
+    import builtins
+
+    original_import = builtins.__import__
+
+    def guard_import(name, *args, **kwargs):
+        assert name != "wisp.daemon.windows_service"
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guard_import)
+    assert doctor._windows_service_name() == "WispService"
 
 
 # ─── MEMBERSHIP CHECK TESTS ──────────────────────────────────────

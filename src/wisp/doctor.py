@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from wisp.config.constants import (
+    WINDOWS_SERVICE_NAME,
     WIREGUARD_KEYS_DIR,
     WISP_CONFIG_DIR,
     WISP_DATA_DIR,
@@ -119,13 +120,8 @@ def _is_windows() -> bool:
 
 
 def _windows_service_name() -> str:
-    """Resolve the Windows service name from the daemon service wrapper."""
-    try:
-        from wisp.daemon.windows_service import WispService
-
-        return getattr(WispService, "_svc_name_", "WispService")
-    except ImportError:
-        return "WispService"
+    """Return the service name without importing its logging setup."""
+    return WINDOWS_SERVICE_NAME
 
 
 def _safe_check(name: str, check_fn: Callable[[], Check]) -> Check:
@@ -243,19 +239,40 @@ def check_daemon() -> Check:
                     name="daemon",
                     status=CheckStatus.FAIL,
                     detail=f"Windows service '{service_name}' not installed or not running",
-                    hint="run installer as Administrator (setup.ps1)",
+                    hint="wisp daemon install (approve the Administrator prompt)",
                 )
         except Exception as exc:
             return Check(
                 name="daemon",
                 status=CheckStatus.FAIL,
                 detail=f"failed to query service '{service_name}': {exc}",
-                hint="run installer as Administrator (setup.ps1)",
+                hint="wisp daemon install (approve the Administrator prompt)",
             )
 
-        probe = _run_bounded(
-            status_wireguard_client, timeout=_DAEMON_PROBE_TIMEOUT_SECONDS
-        )
+        try:
+            probe = _run_bounded(
+                status_wireguard_client, timeout=_DAEMON_PROBE_TIMEOUT_SECONDS
+            )
+        except Exception as exc:
+            error_code = getattr(exc, "winerror", None)
+            if error_code in (2, 3):
+                detail = (
+                    r"service is registered, but daemon pipe \\.\pipe\wisp is missing"
+                )
+            elif error_code == 5 or isinstance(exc, PermissionError):
+                detail = r"access denied to daemon pipe \\.\pipe\wisp"
+            else:
+                detail = f"daemon pipe probe failed: {exc}"
+            return Check(
+                name="daemon",
+                status=CheckStatus.FAIL,
+                detail=detail,
+                hint=(
+                    f"Get-Service {service_name}; inspect "
+                    r"$env:ProgramData\wisp\logs\service-startup.log, wisp.log "
+                    "and the Application event log"
+                ),
+            )
         return _daemon_check_from_probe(probe, f"Restart-Service {service_name}")
 
     # Linux implementation

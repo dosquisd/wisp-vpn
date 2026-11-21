@@ -176,9 +176,13 @@ python -m wisp.daemon.server
 `WispService(win32serviceutil.ServiceFramework)` — Windows Service wrapper:
 
 - `_svc_name_ = "WispService"`, display name "Wisp Daemon Service".
-- `SvcRun` starts an asyncio event loop and runs `main(transport=...)` with a
+- `SvcDoRun` starts an asyncio event loop and runs `main(transport=...)` with a
   `WindowsNamedPipeTransport`; `SvcStop` signals the transport to stop and
   drains/closes pending tasks.
+- Startup and runtime failures include full tracebacks in the Application
+  event log and `%ProgramData%\wisp\logs\service-startup.log` (or the service's
+  `WISP_LOG_DIR`). `wisp daemon install` waits for a status response on the Named
+  Pipe before reporting success; SCM registration alone is insufficient.
 - Install/update/remove via the pywin32 command line:
 
 ```bash

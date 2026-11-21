@@ -189,6 +189,13 @@ native Windows service for the daemon:
 6. Installs the Wisp Windows service from the uv-managed environment.
 7. Starts the Wisp service and records an install manifest.
 
+On Windows, service registration and `sc.exe start` do not prove that the daemon
+is ready. The installer waits up to 30 seconds for a decoded status response on
+`\\.\pipe\wisp` before reporting success. A response saying no tunnel is up is
+normal and still proves the daemon is reachable. If startup fails, inspect
+`%ProgramData%\wisp\logs\service-startup.log`, `wisp.log`, and the Application
+event log.
+
 To test changes from a local checkout before publishing a release, run this
 from the repository root:
 
