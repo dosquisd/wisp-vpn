@@ -14,12 +14,17 @@
 
 .PARAMETER DryRun
     Print the plan without changing the machine.
+
+.PARAMETER PackageSource
+    Package name, local checkout, or wheel to install. Defaults to wisp-vpn.
 #>
 
 [CmdletBinding()]
 param(
     [switch]$SkipPulumi,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [ValidateNotNullOrEmpty()]
+    [string]$PackageSource = "wisp-vpn"
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,7 +40,6 @@ $WireGuardInstallerPath = Join-Path $env:TEMP "wisp-wireguard-installer.exe"
 $WispDataDir = Join-Path $env:LOCALAPPDATA "wisp"
 $ManifestPath = Join-Path $WispDataDir "install-manifest.json"
 $WispGroup = "wisp"
-$ServiceName = "WispService"
 
 $PreExisting = [System.Collections.Generic.List[string]]::new()
 $InstalledByWisp = [System.Collections.Generic.List[string]]::new()
@@ -299,7 +303,7 @@ function Install-WispCli {
     Write-Step "Installing Wisp CLI"
 
     if ($DryRun) {
-        Write-Plan "uv tool install --force --reinstall --python $WispPythonVersion --python-preference only-managed $WispPackage"
+        Write-Plan "uv tool install --force --reinstall --python $WispPythonVersion --python-preference only-managed -- `"$PackageSource`""
         return
     }
 
@@ -312,7 +316,7 @@ function Install-WispCli {
             "tool", "install", "--force", "--reinstall",
             "--python", $WispPythonVersion,
             "--python-preference", "only-managed",
-            $WispPackage
+            "--", "`"$PackageSource`""
         )
     if ($exitCode -ne 0) {
         throw "Could not install $WispPackage with uv."

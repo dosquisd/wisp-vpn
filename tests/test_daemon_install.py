@@ -987,10 +987,12 @@ def test_prepare_windows_service_runtime_skips_identical_locked_dlls(
     host_dir.mkdir(parents=True)
     (host_dir / "pythonservice.exe").write_bytes(b"service-host")
     source = dll_dir / "pywintypes.dll"
-    destination = venv_dir / source.name
+    scripts_dir = venv_dir / "Scripts"
+    scripts_dir.mkdir()
+    destination = scripts_dir / source.name
     source.write_bytes(b"runtime")
     destination.write_bytes(b"runtime")
-    (venv_dir / "pythonservice.exe").write_bytes(b"service-host")
+    (scripts_dir / "pythonservice.exe").write_bytes(b"service-host")
     (venv_dir / "Lib" / "site-packages" / "win32" / "pythonservice.exe").write_bytes(
         b"service-host"
     )
@@ -1012,6 +1014,7 @@ def test_prepare_windows_service_runtime_copies_python_runtime_dll(
     host_dir = venv_dir / "Lib" / "site-packages" / "win32"
     host_dir.mkdir(parents=True)
     (host_dir / "pythonservice.exe").write_bytes(b"service-host")
+    (venv_dir / "Scripts").mkdir()
     base_prefix = tmp_path / "python"
     base_prefix.mkdir()
     (base_prefix / "python314.dll").write_bytes(b"python-runtime")
@@ -1023,7 +1026,9 @@ def test_prepare_windows_service_runtime_copies_python_runtime_dll(
     monkeypatch.setattr(daemon_install.sys, "base_prefix", str(base_prefix))
 
     assert daemon_install._prepare_windows_service_runtime() is True
-    assert (venv_dir / "python314.dll").read_bytes() == b"python-runtime"
+    assert (venv_dir / "Scripts" / "python314.dll").read_bytes() == b"python-runtime"
+    assert (venv_dir / "Scripts" / "pythonservice.exe").read_bytes() == b"service-host"
+    assert not (venv_dir / "pythonservice.exe").exists()
 
 
 def test_install_windows_surfaces_admin_failure(

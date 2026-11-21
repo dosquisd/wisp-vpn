@@ -54,6 +54,25 @@ service setup without Administrator approval.
 If the UAC request succeeds but installation fails, inspect the installer log
 paths printed with the error under `%LOCALAPPDATA%\wisp\installer-logs`.
 
+Windows error 1053 only says the service did not respond during startup. It
+can also occur when the native Python host fails before Wisp creates a log.
+Inspect the Application log as well as the Service Control Manager events:
+
+```powershell
+Get-WinEvent -FilterHashtable @{
+    LogName = 'Application'
+    StartTime = (Get-Date).AddMinutes(-10)
+} | Where-Object ProviderName -in 'Python Service', 'Application Error', 'SideBySide' |
+    Select-Object TimeCreated, ProviderName, Id, Message | Format-List
+```
+
+Older builds placed `pythonservice.exe` in the uv environment's root. With
+Python 3.12 this selects the wrong dependency directory during startup. The
+host and its runtime DLLs must be in `Scripts`, beside `python.exe`. Reinstall
+with a release containing the fix, or test a corrected checkout using
+`.\scripts\install.ps1 -PackageSource .` from its root. Running the default
+installer downloads PyPI and does not install local Python code changes.
+
 If `scripts/install.ps1` reports that `Start-Service` cannot start
 `WispService`, inspect the daemon log before retrying:
 

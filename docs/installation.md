@@ -189,6 +189,18 @@ native Windows service for the daemon:
 6. Installs the Wisp Windows service from the uv-managed environment.
 7. Starts the Wisp service and records an install manifest.
 
+To test changes from a local checkout before publishing a release, run this
+from the repository root:
+
+```powershell
+.\scripts\install.ps1 -PackageSource .
+```
+
+`-PackageSource` also accepts a wheel path. Without it, the installer downloads
+the PyPI release, even when the script is run from a checkout. The Windows
+service host and its runtime DLLs are placed beside the environment's
+`Scripts\python.exe` so Python loads that environment's dependencies.
+
 Verify the installation by opening a new terminal and running:
 
 ```powershell

@@ -44,7 +44,7 @@ class WispService(win32serviceutil.ServiceFramework):
     _svc_name_ = "WispService"
     _svc_display_name_ = "Wisp Daemon Service"
     _svc_description_ = "Privileged daemon for managing the Wisp VPN on Windows."
-    _exe_name_ = str(Path(sys.exec_prefix) / "pythonservice.exe")
+    _exe_name_ = str(Path(sys.executable).with_name("pythonservice.exe"))
 
     def __init__(self, args):
         super().__init__(args)
@@ -102,4 +102,6 @@ class WispService(win32serviceutil.ServiceFramework):
 
 
 if __name__ == "__main__":
-    win32serviceutil.HandleCommandLine(WispService)
+    win32serviceutil.HandleCommandLine(
+        WispService, serviceClassString="wisp.daemon.windows_service.WispService"
+    )

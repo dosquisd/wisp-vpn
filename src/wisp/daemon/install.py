@@ -562,25 +562,28 @@ def _wireguard_warning(missing: list[str]) -> None:
 
 
 def _prepare_windows_service_runtime() -> bool:
-    """Copy the pywin32 service host and runtime DLLs into the venv.
+    """Copy the pywin32 service host and runtime DLLs beside Python.
 
     The pywin32 installer normally moves ``pythonservice.exe`` and copies
     ``pywintypes`` beside the base Python. That base can be a Microsoft Store
     installation under ``WindowsApps``, which is not writable even for some
-    elevated processes. Keeping all service files in the uv environment avoids
-    that machine-level write and gives the SCM a stable host path.
+    elevated processes. The host belongs in the venv's ``Scripts`` directory,
+    beside ``python.exe``: Python 3.12's site initialization derives the venv
+    prefix from the executable's parent directory. Putting the host in the
+    venv root selects the wrong site-packages and fails before loading Wisp.
 
     Returns:
         bool: True when preparation succeeds, otherwise False.
     """
-    venv_dir = Path(sys.executable).parent.parent
+    scripts_dir = Path(sys.executable).parent
+    venv_dir = scripts_dir.parent
     dll_dir = venv_dir / "Lib" / "site-packages" / "pywin32_system32"
     if not dll_dir.is_dir():
         _print_stderr(f"Could not find pywin32 runtime directory: {dll_dir}")
         return False
 
     host_source = venv_dir / "Lib" / "site-packages" / "win32" / "pythonservice.exe"
-    host_destination = venv_dir / "pythonservice.exe"
+    host_destination = scripts_dir / "pythonservice.exe"
     if not host_source.is_file():
         _print_stderr(f"Could not find pywin32 service host: {host_source}")
         return False
@@ -595,7 +598,7 @@ def _prepare_windows_service_runtime() -> bool:
         ):
             shutil.copy2(host_source, host_destination)
         for dll in runtime_dlls:
-            destination = venv_dir / dll.name
+            destination = scripts_dir / dll.name
             if destination.is_file() and filecmp.cmp(dll, destination, shallow=False):
                 continue
             try:
