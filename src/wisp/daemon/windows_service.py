@@ -72,7 +72,11 @@ class WispService(win32serviceutil.ServiceFramework):
             from wisp.daemon.server import main
             from wisp.daemon.transport import WindowsNamedPipeTransport
 
-            self._loop = asyncio.new_event_loop()
+            # pywin32 can first import threading on the SCM worker, which the
+            # default Proactor loop then mistakes for a signal-capable main
+            # thread. Named Pipe I/O uses to_thread, so a Selector loop suffices
+            # and avoids Proactor's main-thread-only signal.set_wakeup_fd call.
+            self._loop = asyncio.SelectorEventLoop()
             asyncio.set_event_loop(self._loop)
             self._transport = WindowsNamedPipeTransport()
             self._main_task = self._loop.create_task(main(transport=self._transport))

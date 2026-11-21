@@ -148,6 +148,88 @@ def test_service_registration_uses_importable_class_and_scripts_host(
     assert Path(service_class._exe_name_) == tmp_path / "Scripts" / "pythonservice.exe"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows service event loop")
+def test_service_runs_when_threading_is_first_imported_on_native_thread(
+    tmp_path: Path,
+) -> None:
+    """Reproduce pywin32's native-thread bootstrap without registering a service."""
+    import win32service
+
+    # A fresh interpreter must import threading on the native service thread.
+    # The threading module then calls it the main thread, while signal rejects
+    # set_wakeup_fd there. An ordinary threading.Thread cannot reproduce this.
+    probe = """
+import _thread
+import sys
+
+finished = _thread.allocate_lock()
+finished.acquire()
+failures = []
+
+def service_thread():
+    try:
+        import site
+        site.addsitedir(sys.argv[2])
+        sys.path.insert(0, sys.argv[3])
+
+        import asyncio
+        import runpy
+        import threading
+        import servicemanager
+        from wisp.daemon import server
+
+        assert threading.current_thread() is threading.main_thread()
+        policy = asyncio.get_event_loop_policy()
+        servicemanager.LogInfoMsg = lambda message: None
+        servicemanager.LogErrorMsg = lambda message: None
+
+        async def probe_main(transport):
+            loop = asyncio.get_running_loop()
+            worker_id = await asyncio.to_thread(_thread.get_ident)
+            assert worker_id != _thread.get_ident()
+            await loop.shutdown_default_executor()
+
+        server.main = probe_main
+        service_class = runpy.run_path(sys.argv[1])['WispService']
+        service = service_class.__new__(service_class)
+        service._loop = service._main_task = service._transport = None
+        service.SvcDoRun()
+        assert service._loop is None
+        assert service._main_task is None
+        assert service._transport is None
+        assert asyncio.get_event_loop_policy() is policy
+    except BaseException:
+        import traceback
+        failures.append(traceback.format_exc())
+    finally:
+        finished.release()
+
+_thread.start_new_thread(service_thread, ())
+if not finished.acquire(timeout=15):
+    sys.exit('Native service thread did not finish')
+if failures:
+    sys.exit(failures[0])
+"""
+    environment = {**os.environ, "WISP_LOG_DIR": str(tmp_path / "logs")}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            probe,
+            str(SERVICE_FILE),
+            str(Path(win32service.__file__).parents[1]),
+            str(SERVICE_FILE.parents[2]),
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows service wrapper")
 @pytest.mark.parametrize("failure_at", ["import", "transport", "serve"])
 def test_service_failure_preserves_traceback_and_cleans_up(

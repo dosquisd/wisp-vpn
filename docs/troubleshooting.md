@@ -87,6 +87,15 @@ Get-WinEvent -FilterHashtable @{
 pywin32 uses `WispService` as its event source after constructing the service
 object. Filtering only for `Python Service` can hide startup failures.
 
+If the traceback ends with `ValueError: set_wakeup_fd only works in main thread
+of the main interpreter` inside `asyncio.new_event_loop()`, Python has loaded
+successfully but the default Windows Proactor loop cannot initialize on
+pywin32's native service thread. The service must use an explicit
+`asyncio.SelectorEventLoop`; its Named Pipe operations run through worker
+threads and do not require asyncio's native pipe support. Reinstall from a
+release containing this fix, or from an updated checkout using
+`.\scripts\install.ps1 -PackageSource .`.
+
 If the file log is empty and the service is stopped, run its registered native
 host in an Administrator PowerShell to display errors directly in the console:
 
