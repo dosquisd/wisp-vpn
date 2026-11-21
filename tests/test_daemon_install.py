@@ -610,6 +610,7 @@ def test_install_windows_warns_when_wireguard_missing(
     monkeypatch.setattr(
         daemon_install, "_configure_windows_service_environment", lambda: True
     )
+    monkeypatch.setattr(daemon_install, "_wait_for_windows_daemon", lambda: True)
 
     exit_code = install_daemon()
 
@@ -913,8 +914,12 @@ def test_uninstall_linux_requires_root(
 # --- Windows branch (pywin32 service) ----------------------------------------
 
 
+@pytest.mark.parametrize("ready", [True, False])
 def test_install_windows_runs_pywin32_service_commands(
-    runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+    runner: FakeRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    ready: bool,
 ) -> None:
     monkeypatch.setattr(
         daemon_install, "_detect_platform", lambda: PlatformEnum.WINDOWS
@@ -928,10 +933,12 @@ def test_install_windows_runs_pywin32_service_commands(
     monkeypatch.setattr(
         daemon_install, "_configure_windows_service_environment", lambda: True
     )
+    monkeypatch.setattr(daemon_install, "_wait_for_windows_daemon", lambda: ready)
 
     exit_code = install_daemon()
 
-    assert exit_code == 0
+    assert exit_code == (0 if ready else 1)
+    assert ("service installed" in capsys.readouterr().out) is ready
     assert runner.commands() == [
         [
             sys.executable,
@@ -950,6 +957,52 @@ def test_install_windows_runs_pywin32_service_commands(
         ],
         ["sc.exe", "start", "WispService"],
     ]
+
+
+@pytest.mark.parametrize("outcome", ["ready", "failed", "timeout"])
+def test_wait_for_windows_daemon_requires_bounded_response(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    outcome: str,
+) -> None:
+    """Service registration alone cannot count as a responsive daemon."""
+
+    def run(command, **kwargs):
+        assert kwargs["timeout"] == 2
+        assert command[0] == sys.executable
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired(command, 2, stderr=b"pipe is missing")
+        return subprocess.CompletedProcess(
+            command, 0 if outcome == "ready" else 1, stdout="", stderr="pipe is missing"
+        )
+
+    monkeypatch.setattr(daemon_install.subprocess, "run", run)
+    assert daemon_install._wait_for_windows_daemon(timeout=2) is (outcome == "ready")
+    stderr = capsys.readouterr().err
+    if outcome != "ready":
+        assert "pipe is missing" in stderr
+        assert "service-startup.log" in stderr
+
+
+def test_windows_readiness_probe_retries_until_no_tunnel_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decoded down-tunnel response proves the service is ready."""
+    from wisp.daemon.protocol import Response
+    from wisp.wireguard import local_client
+
+    attempts = []
+
+    def status():
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise FileNotFoundError("pipe is missing")
+        return Response(ok=False, message="no tunnel")
+
+    monkeypatch.setattr(local_client, "status_wireguard_client", status)
+    monkeypatch.setattr(daemon_install.time, "sleep", lambda seconds: None)
+    daemon_install._probe_windows_daemon(timeout=2)
+    assert len(attempts) == 2
 
 
 def test_ensure_windows_group_accepts_existing_membership(
@@ -987,10 +1040,12 @@ def test_prepare_windows_service_runtime_skips_identical_locked_dlls(
     host_dir.mkdir(parents=True)
     (host_dir / "pythonservice.exe").write_bytes(b"service-host")
     source = dll_dir / "pywintypes.dll"
-    destination = venv_dir / source.name
+    scripts_dir = venv_dir / "Scripts"
+    scripts_dir.mkdir()
+    destination = scripts_dir / source.name
     source.write_bytes(b"runtime")
     destination.write_bytes(b"runtime")
-    (venv_dir / "pythonservice.exe").write_bytes(b"service-host")
+    (scripts_dir / "pythonservice.exe").write_bytes(b"service-host")
     (venv_dir / "Lib" / "site-packages" / "win32" / "pythonservice.exe").write_bytes(
         b"service-host"
     )
@@ -1012,9 +1067,12 @@ def test_prepare_windows_service_runtime_copies_python_runtime_dll(
     host_dir = venv_dir / "Lib" / "site-packages" / "win32"
     host_dir.mkdir(parents=True)
     (host_dir / "pythonservice.exe").write_bytes(b"service-host")
+    (venv_dir / "Scripts").mkdir()
     base_prefix = tmp_path / "python"
     base_prefix.mkdir()
     (base_prefix / "python314.dll").write_bytes(b"python-runtime")
+    (base_prefix / "vcruntime140.dll").write_bytes(b"vc-runtime")
+    (base_prefix / "vcruntime140_1.dll").write_bytes(b"vc-exceptions-runtime")
     monkeypatch.setattr(
         daemon_install.sys,
         "executable",
@@ -1023,7 +1081,13 @@ def test_prepare_windows_service_runtime_copies_python_runtime_dll(
     monkeypatch.setattr(daemon_install.sys, "base_prefix", str(base_prefix))
 
     assert daemon_install._prepare_windows_service_runtime() is True
-    assert (venv_dir / "python314.dll").read_bytes() == b"python-runtime"
+    assert (venv_dir / "Scripts" / "python314.dll").read_bytes() == b"python-runtime"
+    assert (venv_dir / "Scripts" / "vcruntime140.dll").read_bytes() == b"vc-runtime"
+    assert (venv_dir / "Scripts" / "vcruntime140_1.dll").read_bytes() == (
+        b"vc-exceptions-runtime"
+    )
+    assert (venv_dir / "Scripts" / "pythonservice.exe").read_bytes() == b"service-host"
+    assert not (venv_dir / "pythonservice.exe").exists()
 
 
 def test_install_windows_surfaces_admin_failure(

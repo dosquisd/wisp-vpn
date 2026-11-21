@@ -16,6 +16,7 @@ import platformdirs
 
 CREATED_BY_TAG: str = "wisp"
 PULUMI_PROJECT_NAME: str = "wisp-project"
+WINDOWS_SERVICE_NAME: str = "WispService"
 
 
 def get_pulumi_stack_name(provider: str) -> str:

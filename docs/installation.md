@@ -62,6 +62,12 @@ skipped), the `wisp` local group, and the native `WispService` service. It
 installs the CLI per-user and elevates only the daemon setup. A local
 installation can be run with `.\scripts\install.ps1`; it is safe to run again.
 
+Approve the Windows UAC prompt when the installer reaches "Installing the Wisp
+service". If Windows cancels or denies that request (error 1223), the installer
+stops with instructions to retry; the CLI and tools already installed remain
+available. Service setup launched through UAC prints the daemon's output and
+retains logs under `%LOCALAPPDATA%\wisp\installer-logs`.
+
 To skip Pulumi or preview the plan:
 
 ```powershell
@@ -182,6 +188,25 @@ native Windows service for the daemon:
 5. Creates the `wisp` local group and adds the current user to it.
 6. Installs the Wisp Windows service from the uv-managed environment.
 7. Starts the Wisp service and records an install manifest.
+
+On Windows, service registration and `sc.exe start` do not prove that the daemon
+is ready. The installer waits up to 30 seconds for a decoded status response on
+`\\.\pipe\wisp` before reporting success. A response saying no tunnel is up is
+normal and still proves the daemon is reachable. If startup fails, inspect
+`%ProgramData%\wisp\logs\service-startup.log`, `wisp.log`, and the Application
+event log.
+
+To test changes from a local checkout before publishing a release, run this
+from the repository root:
+
+```powershell
+.\scripts\install.ps1 -PackageSource .
+```
+
+`-PackageSource` also accepts a wheel path. Without it, the installer downloads
+the PyPI release, even when the script is run from a checkout. The Windows
+service host and its runtime DLLs are placed beside the environment's
+`Scripts\python.exe` so Python loads that environment's dependencies.
 
 Verify the installation by opening a new terminal and running:
 

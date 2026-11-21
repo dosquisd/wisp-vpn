@@ -45,6 +45,92 @@ sudo systemctl restart wisp.socket wisp.service
 
 On Windows: `Get-Service WispService` and the Windows Event Viewer.
 
+If installation reports success but `wisp doctor` reports `CreateFile` error 2,
+the daemon's Named Pipe was absent when the client tried to open it. This is
+different from access denied (error 5). Service registration alone does not
+prove that the daemon finished initialization or stayed running. Inspect the
+service state and startup logs in the same Windows machine where it failed:
+
+```powershell
+Get-Service WispService | Format-List Name, Status
+Get-Content "$env:ProgramData\wisp\logs\service-startup.log" -Tail 80
+Get-Content "$env:ProgramData\wisp\logs\wisp.log" -Tail 80
+```
+
+Current installers wait for an actual status response before reporting
+success. `service-startup.log` contains full tracebacks for failures during
+daemon imports, event-loop creation, transport initialization, or serving.
+Older versions may only record these errors in the Application event log.
+When `WISP_LOG_DIR` is set for the service, inspect that directory instead.
+
+If `scripts/install.ps1` reports "Administrator permission was canceled or
+denied" (Windows error 1223), Windows did not launch the service installation.
+Run the installer again as your regular user and approve the UAC prompt. In a
+VM, check the guest desktop for the prompt. The installer cannot continue with
+service setup without Administrator approval.
+
+If the UAC request succeeds but installation fails, inspect the installer log
+paths printed with the error under `%LOCALAPPDATA%\wisp\installer-logs`.
+
+Windows error 1053 only says the service did not respond during startup. It
+can also occur when the native Python host fails before Wisp creates a log.
+Inspect the Application log as well as the Service Control Manager events:
+
+```powershell
+Get-WinEvent -FilterHashtable @{
+    LogName = 'Application'
+    StartTime = (Get-Date).AddMinutes(-10)
+} | Where-Object ProviderName -in 'WispService', 'Python Service', 'Application Error', 'SideBySide' |
+    Select-Object TimeCreated, ProviderName, Id, Message | Format-List
+```
+
+pywin32 uses `WispService` as its event source after constructing the service
+object. Filtering only for `Python Service` can hide startup failures.
+
+If the traceback ends with `ValueError: set_wakeup_fd only works in main thread
+of the main interpreter` inside `asyncio.new_event_loop()`, Python has loaded
+successfully but the default Windows Proactor loop cannot initialize on
+pywin32's native service thread. The service must use an explicit
+`asyncio.SelectorEventLoop`; its Named Pipe operations run through worker
+threads and do not require asyncio's native pipe support. Reinstall from a
+release containing this fix, or from an updated checkout using
+`.\scripts\install.ps1 -PackageSource .`.
+
+If the file log is empty and the service is stopped, run its registered native
+host in an Administrator PowerShell to display errors directly in the console:
+
+```powershell
+$serviceKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\WispService'
+$serviceExe = (Get-ItemProperty -LiteralPath $serviceKey).ImagePath.Trim('"')
+& $serviceExe -debug WispService
+```
+
+This runs the service under the current account. If it keeps running, press
+Ctrl+C to stop it; a successful debug run does not prove that the LocalSystem
+service has the same environment or permissions.
+
+If the native host exits silently before printing its debug banner, capture
+its process exit code with PowerShell (use the `$serviceExe` above):
+
+```powershell
+$daemonProcess = Start-Process -FilePath $serviceExe -ArgumentList '-debug WispService' -NoNewWindow -Wait -PassThru
+"Exit code: $($daemonProcess.ExitCode)"
+```
+
+Exit code `-1073741515` (`0xC0000135`, `STATUS_DLL_NOT_FOUND`) means Windows
+could not load a required DLL before entering the program. The service host
+requires `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll` in addition to the Python
+and pywin32 DLLs. Current installers copy the Visual C++ runtime bundled with
+the base Python beside the host, so a clean machine does not need to provide
+these DLLs through a previously installed application.
+
+Older builds placed `pythonservice.exe` in the uv environment's root. With
+Python 3.12 this selects the wrong dependency directory during startup. The
+host and its runtime DLLs must be in `Scripts`, beside `python.exe`. Reinstall
+with a release containing the fix, or test a corrected checkout using
+`.\scripts\install.ps1 -PackageSource .` from its root. Running the default
+installer downloads PyPI and does not install local Python code changes.
+
 If `scripts/install.ps1` reports that `Start-Service` cannot start
 `WispService`, inspect the daemon log before retrying:
 

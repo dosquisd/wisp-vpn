@@ -14,12 +14,17 @@
 
 .PARAMETER DryRun
     Print the plan without changing the machine.
+
+.PARAMETER PackageSource
+    Package name, local checkout, or wheel to install. Defaults to wisp-vpn.
 #>
 
 [CmdletBinding()]
 param(
     [switch]$SkipPulumi,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [ValidateNotNullOrEmpty()]
+    [string]$PackageSource = "wisp-vpn"
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,7 +40,6 @@ $WireGuardInstallerPath = Join-Path $env:TEMP "wisp-wireguard-installer.exe"
 $WispDataDir = Join-Path $env:LOCALAPPDATA "wisp"
 $ManifestPath = Join-Path $WispDataDir "install-manifest.json"
 $WispGroup = "wisp"
-$ServiceName = "WispService"
 
 $PreExisting = [System.Collections.Generic.List[string]]::new()
 $InstalledByWisp = [System.Collections.Generic.List[string]]::new()
@@ -73,6 +77,7 @@ function Invoke-NativeCommand {
         $process = Start-Process `
             -FilePath $FilePath `
             -ArgumentList $ArgumentList `
+            -WindowStyle Hidden `
             -Wait `
             -PassThru `
             -RedirectStandardOutput $stdout `
@@ -142,16 +147,92 @@ function Test-Administrator {
 }
 
 function Invoke-ElevatedDaemonSetup {
+    Write-Step "Installing the Wisp service"
+
     if ($DryRun) {
         Write-Plan "wisp daemon install (requests Administrator permission when needed)"
         return
     }
 
-    $exitCode = Invoke-NativeCommand `
-        -FilePath (Get-Command wisp -ErrorAction Stop).Source `
-        -ArgumentList @("daemon", "install")
+    $wisp = (Get-Command wisp -ErrorAction Stop).Source
+    if (Test-Administrator) {
+        $exitCode = Invoke-NativeCommand `
+            -FilePath $wisp `
+            -ArgumentList @("daemon", "install")
+        if ($exitCode -ne 0) {
+            throw "wisp daemon install failed with exit code $exitCode."
+        }
+        return
+    }
+
+    # Elevate here instead of relying on the installed package's UAC helper.
+    # RunAs cannot redirect streams; the elevated child captures them instead.
+    $logDir = Join-Path $WispDataDir "installer-logs"
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    $logId = [guid]::NewGuid().ToString()
+    $stdout = Join-Path $logDir "daemon-$logId.out.log"
+    $stderr = Join-Path $logDir "daemon-$logId.err.log"
+    $escapedWisp = $wisp.Replace("'", "''")
+    $escapedStdout = $stdout.Replace("'", "''")
+    $escapedStderr = $stderr.Replace("'", "''")
+
+    $elevatedCommand = @"
+`$ErrorActionPreference = 'Stop'
+`$ProgressPreference = 'SilentlyContinue'
+try {
+    `$process = Start-Process -FilePath '$escapedWisp' -ArgumentList @('daemon', 'install') -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput '$escapedStdout' -RedirectStandardError '$escapedStderr'
+    exit `$process.ExitCode
+}
+catch {
+    [IO.File]::AppendAllText('$escapedStderr', `$_.Exception.Message, [Text.Encoding]::UTF8)
+    exit 1
+}
+"@
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($elevatedCommand)
+    )
+
+    Write-Host "Approve the Windows UAC prompt to install the Wisp service."
+    try {
+        $process = Start-Process `
+            -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+            -Verb RunAs `
+            -WindowStyle Hidden `
+            -ArgumentList @(
+                "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass",
+                "-EncodedCommand", $encodedCommand
+            ) `
+            -Wait `
+            -PassThru
+    }
+    catch {
+        $cause = $_.Exception
+        while ($null -ne $cause) {
+            if ($cause -is [System.ComponentModel.Win32Exception] -and
+                $cause.NativeErrorCode -eq 1223) {
+                throw (
+                    "Administrator permission was canceled or denied (Windows error 1223). " +
+                    "The Wisp service was not installed by this step. " +
+                    "Run the installer again and approve the UAC prompt."
+                )
+            }
+            $cause = $cause.InnerException
+        }
+        throw "Could not request Administrator permission: $($_.Exception.Message)"
+    }
+
+    foreach ($log in @($stdout, $stderr)) {
+        if (Test-Path -LiteralPath $log) {
+            Get-Content -LiteralPath $log | ForEach-Object { Write-Host $_ }
+        }
+    }
+    $exitCode = $process.ExitCode
     if ($exitCode -ne 0) {
-        throw "wisp daemon install failed with exit code $exitCode."
+        throw (
+            "wisp daemon install failed with exit code $exitCode. " +
+            "Installation logs: $stdout and $stderr"
+        )
     }
 }
 
@@ -222,7 +303,7 @@ function Install-WispCli {
     Write-Step "Installing Wisp CLI"
 
     if ($DryRun) {
-        Write-Plan "uv tool install --force --reinstall --python $WispPythonVersion --python-preference only-managed $WispPackage"
+        Write-Plan "uv tool install --force --reinstall --python $WispPythonVersion --python-preference only-managed -- `"$PackageSource`""
         return
     }
 
@@ -235,7 +316,7 @@ function Install-WispCli {
             "tool", "install", "--force", "--reinstall",
             "--python", $WispPythonVersion,
             "--python-preference", "only-managed",
-            $WispPackage
+            "--", "`"$PackageSource`""
         )
     if ($exitCode -ne 0) {
         throw "Could not install $WispPackage with uv."
