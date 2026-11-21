@@ -62,6 +62,12 @@ skipped), the `wisp` local group, and the native `WispService` service. It
 installs the CLI per-user and elevates only the daemon setup. A local
 installation can be run with `.\scripts\install.ps1`; it is safe to run again.
 
+Approve the Windows UAC prompt when the installer reaches "Installing the Wisp
+service". If Windows cancels or denies that request (error 1223), the installer
+stops with instructions to retry; the CLI and tools already installed remain
+available. Service setup launched through UAC prints the daemon's output and
+retains logs under `%LOCALAPPDATA%\wisp\installer-logs`.
+
 To skip Pulumi or preview the plan:
 
 ```powershell

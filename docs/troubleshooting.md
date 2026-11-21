@@ -45,6 +45,15 @@ sudo systemctl restart wisp.socket wisp.service
 
 On Windows: `Get-Service WispService` and the Windows Event Viewer.
 
+If `scripts/install.ps1` reports "Administrator permission was canceled or
+denied" (Windows error 1223), Windows did not launch the service installation.
+Run the installer again as your regular user and approve the UAC prompt. In a
+VM, check the guest desktop for the prompt. The installer cannot continue with
+service setup without Administrator approval.
+
+If the UAC request succeeds but installation fails, inspect the installer log
+paths printed with the error under `%LOCALAPPDATA%\wisp\installer-logs`.
+
 If `scripts/install.ps1` reports that `Start-Service` cannot start
 `WispService`, inspect the daemon log before retrying:
 
